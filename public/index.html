@@ -1034,6 +1034,7 @@ textarea.bug-desc {
           <button class="preset-btn" data-provider="glm5">🧠 GLM-5</button>
           <button class="preset-btn" data-provider="openrouter">🌐 OpenRouter</button>
           <button class="preset-btn" data-provider="minimax">⚡ MiniMax</button>
+          <button class="preset-btn" data-provider="deepseek">🔮 DeepSeek</button>
         </div>
       </div>
       <div class="form-group">
@@ -1043,6 +1044,7 @@ textarea.bug-desc {
           <option value="glm5">GLM-5</option>
           <option value="openrouter">OpenRouter</option>
           <option value="minimax">MiniMax</option>
+          <option value="deepseek">DeepSeek</option>
           <option value="openai">OpenAI 相容</option>
           <option value="custom">自訂</option>
         </select>
@@ -1242,7 +1244,7 @@ textarea.bug-desc {
     const model = cfgModel ? cfgModel.value : '';
 
     // Provider label
-    const providerLabels = { glm5: 'z.ai (GLM-5)', openrouter: 'OpenRouter', minimax: 'MiniMax', ollama: 'Ollama (Local)' };
+    const providerLabels = { glm5: 'z.ai (GLM-5)', openrouter: 'OpenRouter', minimax: 'MiniMax', deepseek: 'DeepSeek', ollama: 'Ollama (Local)' };
     llmProviderText.textContent = providerLabels[provider] || provider || '--';
 
     // Model

@@ -93,5 +93,11 @@ LLM_PRESETS = {
         "api_key": "",
         "model": "",
         "provider": "minimax"
+    },
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "api_key": "",
+        "model": "deepseek-chat",
+        "provider": "deepseek"
     }
 }
