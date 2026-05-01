@@ -1,0 +1,23 @@
+services:
+  bug-detective:
+    build: .
+    ports:
+      - "17580:17580"
+    volumes:
+      - ${INFERNO_ROOT:-/home/avuser/infernoStart01}:/mnt/d/Projects/infernoStart01:ro
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - INFERNO_ROOT=/mnt/d/Projects/infernoStart01
+      - LLM_API_BASE=${LLM_API_BASE:-http://host.docker.internal:11434/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen3.6:35b-a3b-200k}
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

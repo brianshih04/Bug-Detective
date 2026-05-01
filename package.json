@@ -1,0 +1,16 @@
+{
+  "name": "bug-detective",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "build-index": "python3 scripts/build-index.py",
+    "start": "node --env-file=.env server.mjs"
+  },
+  "dependencies": {
+    "7zip-bin": "^5.2.0",
+    "express": "^5.1.0",
+    "fflate": "^0.8.2"
+  }
+}

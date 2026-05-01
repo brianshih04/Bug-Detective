@@ -1,0 +1,927 @@
+"""Root Cause Analysis: 4-step pipeline.
+
+Step 1: Regex log extraction (error codes, func names, file paths)
+Step 2: LLM semantic expansion (Qwen local — synonyms, related modules)
+Step 3: Hybrid search (keyword grep + Qdrant vector → RRF fusion)
+Step 4: Cloud LLM deep analysis (GLM-5 / OpenRouter / MiniMax)
+"""
+import asyncio
+import json
+import re
+import time
+from collections import defaultdict
+from pathlib import Path
+from typing import AsyncGenerator
+
+import httpx
+from llama_index.core import VectorStoreIndex, QueryBundle
+from llama_index.core.retrievers import VectorIndexRetriever
+from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from backend.config import (
+    QDRANT_URL, COLLECTION_NAME, EMBEDDING_MODEL, EMBEDDING_DIM,
+    OLLAMA_URL, OLLAMA_MODEL, GLM5_BASE_URL, GLM5_API_KEY, GLM5_MODEL,
+    SOURCE_DIR, load_llm_config,
+)
+from backend.security import sanitize_for_cloud
+
+
+# ---------------------------------------------------------------------------
+# LLM call helpers
+# ---------------------------------------------------------------------------
+def _chat_url(base_url: str) -> str:
+    """Ensure base_url ends with /chat/completions."""
+    url = base_url.rstrip("/")
+    if url.endswith("/chat/completions"):
+        return url
+    return url + "/chat/completions"
+
+
+async def call_llm_stream(
+    base_url: str, api_key: str, model: str, messages: list[dict],
+    temperature: float = 0.3, max_tokens: int = 4096, timeout: float = 120,
+) -> AsyncGenerator[str, None]:
+    """Stream LLM response via OpenAI-compatible API (SSE)."""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": model, "messages": messages,
+        "temperature": temperature, "max_tokens": max_tokens, "stream": True,
+    }
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream(
+            "POST", _chat_url(base_url), json=payload, headers=headers,
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    reasoning = (
+                        delta.get("reasoning", "")
+                        or delta.get("reasoning_content", "")
+                    )
+                    if reasoning:
+                        yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
+                    if content:
+                        yield json.dumps({"type": "content", "text": content}) + "\n"
+                except json.JSONDecodeError:
+                    continue
+
+
+async def call_llm_sync(
+    base_url: str, api_key: str, model: str, messages: list[dict],
+    temperature: float = 0.3, max_tokens: int = 4096, timeout: float = 120,
+) -> str:
+    """Non-streaming LLM call, returns full response text."""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": model, "messages": messages,
+        "temperature": temperature, "max_tokens": max_tokens,
+    }
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(_chat_url(base_url), json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Index / Retriever setup
+# ---------------------------------------------------------------------------
+def get_retriever(similarity_top_k: int = 10):
+    """Get vector retriever from Qdrant."""
+    embed_model = OllamaEmbedding(
+        model_name=EMBEDDING_MODEL,
+        base_url=OLLAMA_URL,
+        embed_dim=EMBEDDING_DIM,
+    )
+    qdrant_client = QdrantClient(url=QDRANT_URL)
+    vector_store = QdrantVectorStore(
+        client=qdrant_client, collection_name=COLLECTION_NAME,
+    )
+    index = VectorStoreIndex.from_vector_store(
+        vector_store, embed_model=embed_model,
+    )
+    return index.as_retriever(similarity_top_k=similarity_top_k)
+
+
+# =========================================================================
+# STEP 0: Rule-based Log Filtering & Deduplication
+# =========================================================================
+import re
+from collections import Counter, defaultdict
+
+# ── Blacklist: known noisy patterns to drop entirely (unless near errors) ──
+_NOISE_PATTERNS = [
+    # 定著器/加熱器 毫秒級溫度回報 (heartbeat)
+    re.compile(r'FUSER_FUNC_ShowHeatingInfo'),
+    # 背景常態輪詢 (FakeAppProc recheck)
+    re.compile(r'_PrnJobMgr_FakeAppProc'),
+    # 溫濕度感測器重複讀取
+    re.compile(r'TempertureHumidity'),
+    re.compile(r'CalculateHumidity'),
+    # SNMP 網管通訊
+    re.compile(r'\{SNMP\}'),
+    re.compile(r'SNMPSysReadInfo'),
+    re.compile(r'SNMP_TRAP'),
+]
+
+# ── Error detection: lines matching these are NEVER dropped ──
+_KEEP_KEYWORDS = re.compile(
+    r'(error|exception|crash|fault|fail|panic|abort|segfault|timeout|'
+    r'warning|warn|fatal|assert|broken|corrupt|overflow|undefined|'
+    r'ERR_|E-|0x[0-9a-fA-F]{4,})',
+    re.IGNORECASE,
+)
+
+# ── Fingerprinting: normalize variable parts for pattern matching ──
+#    Each rule replaces a type of variable data with a fixed placeholder,
+#    so lines that differ only in numbers/timestamps get the same fingerprint.
+_FP_RULES = [
+    (re.compile(r'\(\d+ms\)'),                      '(Xms)'),       # (5169610ms)
+    (re.compile(r'\([\d, ]+\)'),                    '(N)'),          # ( 358, 108, ... )
+    (re.compile(r'T:\s*\d+'),                       'T:N'),          # T: 12345
+    (re.compile(r'msT\(\d+\)'),                    'msT(N)'),       # msT(12345)
+    (re.compile(r'data\d?:0x[0-9a-fA-F]+'),        'dataN:0xN'),    # data1:0x64
+    (re.compile(r'getData:\d+'),                    'getData:N'),    # getData:123
+    (re.compile(r'\b\d{4,}\b'),                     'N'),            # standalone numbers ≥4 digits
+    (re.compile(r'0x[0-9a-fA-F]{2,}'),              '0xN'),          # hex values
+    (re.compile(r'\d{4}[-/]\d{2}[-/]\d{2}[\s_]\d{2}:\d{2}:\d{2}'),  # dates
+     'DATE'),
+]
+
+
+def _fingerprint(line: str) -> str:
+    """Normalize variable parts (timestamps, numbers, hex) for fuzzy comparison."""
+    s = line
+    for pat, repl in _FP_RULES:
+        s = pat.sub(repl, s)
+    return s
+
+
+def _is_noise(line: str) -> bool:
+    """Check if a line matches a known noise pattern."""
+    return any(p.search(line) for p in _NOISE_PATTERNS)
+
+
+def _is_important(line: str) -> bool:
+    """Check if a line contains error/warning keywords (never drop these)."""
+    return bool(_KEEP_KEYWORDS.search(line))
+
+
+def condense_log(log_text: str, bug_desc: str = "", api_key: str = "") -> str:
+    """Step 0: Programmatic log condensation — two-layer approach.
+
+    Layer 1 — Blacklist filter:
+        Drop known high-frequency noise patterns entirely
+        (FUSER heartbeat, FakeAppProc, temp/humidity polling, SNMP).
+    Layer 2 — Fingerprint sampling:
+        For remaining high-frequency patterns, keep:
+          • First occurrence (with count annotation)
+          • Evenly-spaced samples across the full timeline
+          • Last occurrence (with end annotation)
+          • Any line within ±5 lines of an error/warning
+        This preserves the temporal progression while drastically reducing volume.
+
+    Error/warning lines and their ±5 line context are ALWAYS protected.
+    """
+    if not log_text or len(log_text) < 500:
+        return log_text
+
+    lines = log_text.split('\n')
+    total = len(lines)
+
+    # ── Mark protected lines (error context ±5) ──
+    PROTECT_RANGE = 5
+    protected = set()
+    for i, line in enumerate(lines):
+        if _is_important(line):
+            for d in range(-PROTECT_RANGE, PROTECT_RANGE + 1):
+                j = i + d
+                if 0 <= j < total:
+                    protected.add(j)
+
+    # ── Layer 1: Blacklist filter (unless protected) ──
+    after_filter = []       # [(orig_line_index, line_text), ...]
+    dropped_by_pattern = Counter()
+
+    for i, line in enumerate(lines):
+        if _is_noise(line) and i not in protected:
+            for p in _NOISE_PATTERNS:
+                if p.search(line):
+                    dropped_by_pattern[p.pattern] += 1
+                    break
+            continue  # drop noise
+        after_filter.append((i, line))
+
+    # ── Layer 2: Fingerprint sampling ──
+    n_filtered = len(after_filter)
+    fingerprints = [_fingerprint(line) for _, line in after_filter]
+
+    # Count fingerprint frequencies
+    fp_count = Counter()
+    fp_groups = defaultdict(list)  # fp → list of indices in after_filter
+    for idx, (_, line) in enumerate(after_filter):
+        fp = fingerprints[idx].strip()
+        if fp:
+            fp_count[fp] += 1
+            fp_groups[fp].append(idx)
+
+    # Mark error-context lines in after_filter coordinates
+    filtered_protected = set()
+    for idx, (orig_i, _) in enumerate(after_filter):
+        if orig_i in protected:
+            filtered_protected.add(idx)
+
+    # Select which indices to keep
+    FREQ_THRESHOLD = 5     # Min occurrences to trigger sampling
+    MAX_SAMPLES = 12       # Max evenly-spaced samples per pattern (plus first+last)
+
+    keep = set()
+
+    for fp, indices in fp_groups.items():
+        count = fp_count[fp]
+        if count <= FREQ_THRESHOLD:
+            # Low frequency: keep all
+            keep.update(indices)
+            continue
+
+        # High frequency: always keep all protected lines
+        prot_in_group = {i for i in indices if i in filtered_protected}
+        keep.update(prot_in_group)
+
+        # From non-protected: keep first + evenly-spaced samples + last
+        free = sorted(i for i in indices if i not in filtered_protected)
+        if not free:
+            continue
+
+        selected = {free[0], free[-1]}
+        if len(free) > 2:
+            n = min(MAX_SAMPLES, len(free) - 2)
+            for k in range(1, n + 1):
+                pos = int(k * (len(free) - 1) / (n + 1))
+                if 0 < pos < len(free) - 1:
+                    selected.add(free[pos])
+        keep.update(selected)
+
+    # Keep empty/whitespace lines
+    for idx, (_, line) in enumerate(after_filter):
+        if not line.strip():
+            keep.add(idx)
+
+    # Track first/last non-protected sample for annotations
+    first_sample = {}
+    last_sample = {}
+    for fp in fp_groups:
+        if fp_count[fp] <= FREQ_THRESHOLD:
+            continue
+        free_kept = sorted(
+            i for i in fp_groups[fp] if i in keep and i not in filtered_protected
+        )
+        if free_kept:
+            first_sample[fp] = free_kept[0]
+            last_sample[fp] = free_kept[-1]
+
+    # Build output
+    output = []
+    for idx, (_, line) in enumerate(after_filter):
+        if idx not in keep:
+            continue
+        fp = fingerprints[idx].strip()
+        annotation = ""
+        if fp and fp in first_sample and idx == first_sample[fp]:
+            annotation = f"  ← 此模式共 {fp_count[fp]} 次（保留代表性取樣）"
+        elif fp and fp in last_sample and idx == last_sample[fp]:
+            annotation = f"  ← 此模式到此結束"
+        output.append(line + annotation)
+
+    # Build summary header
+    n_compressed = sum(1 for c in fp_count.values() if c > FREQ_THRESHOLD)
+    reduction = len(output) / max(total, 1) * 100
+    noise_lines = sum(dropped_by_pattern.values())
+
+    summary = [
+        '--- Log 去重結果 ---',
+        f'原始: {total:,} 行 → 去重後: {len(output):,} 行 ({reduction:.0f}%)',
+    ]
+    if noise_lines:
+        summary.append(f'黑名單過濾: {noise_lines:,} 行雜訊已刪除')
+        for pat, cnt in dropped_by_pattern.most_common(5):
+            name = pat.replace('\\', '').replace('(', '').replace(')', '')[:50]
+            summary.append(f'  - {name}: {cnt:,} 行')
+    if n_compressed:
+        summary.append(
+            f'指紋取樣: {n_compressed} 種高頻模式 '
+            f'(頻率 >{FREQ_THRESHOLD}，每種最多 {MAX_SAMPLES + 2} 筆取樣)'
+        )
+    summary += ['--- 以下為去重後 Log ---', '']
+
+    return '\n'.join(summary + output)
+
+
+# =========================================================================
+# STEP 1: Regex Log Extraction
+# =========================================================================
+# Regex patterns for structured extraction from C/C++ logs
+_LOG_PATTERNS = {
+    "error_codes": [
+        # E-0012, ERR_SOMETHING, WARNING_42
+        r'\b(?:E|ERR|ERROR|WARN|WARNING|FATAL|BUG)[-_]?\w{1,30}\b',
+        # 0xERR hex error codes
+        r'\b0x[0-9A-Fa-f]{4,16}\b',
+        # HTTP-like codes
+        r'\b(?:status|code|errno)\s*[=:]\s*(\d{3,5})\b',
+    ],
+    "function_names": [
+        # C function calls: funcName(
+        r'\b[a-zA-Z_]\w{1,60}\s*\(',
+        # C++ method: Class::method(
+        r'\b[a-zA-Z_]\w{1,40}::{1,3}[a-zA-Z_]\w{1,60}\s*\(',
+        # #define FUNC macros
+        r'#\s*define\s+([A-Z_]\w{1,40})',
+    ],
+    "file_paths": [
+        # /path/to/file.c:123
+        r'[/\w\-_.]+\.(?:c|cpp|h|hpp|cc|cxx|hxx|hh|ipp)[:]\d+',
+        # "file.c", line 42
+        r'["\x27]?[\w\-_./]+\.(?:c|cpp|h|hpp|cc|cxx|hxx|hh|ipp)["\x27]?',
+    ],
+    "exceptions": [
+        # C++ exceptions
+        r'\b(?:exception|throw|catch|Segfault|SIGSEGV|SIGABRT|SIGBUS|SIGFPE)\b',
+        r'\b(?:null\s*pointer|nullptr|dereference|out\s*of\s*bounds|buffer\s*overflow|stack\s*overflow|memory\s*leak|double\s*free|use\s*after\s*free)\b',
+        # Assertion failures
+        r'\bassert(?:ion)?\s*(?:failed|failure)?\b',
+    ],
+    "memory_addresses": [
+        r'\b0x[0-9A-Fa-f]{8,16}\b',
+    ],
+}
+
+
+def extract_structured_log(log_text: str) -> dict:
+    """Step 1: Use regex to extract structured info from log text.
+
+    Returns dict with keys: error_codes, function_names, file_paths,
+    exceptions, memory_addresses, raw_lines (relevant log lines).
+    """
+    result = {key: [] for key in _LOG_PATTERNS}
+    seen = {key: set() for key in _LOG_PATTERNS}
+
+    for category, patterns in _LOG_PATTERNS.items():
+        for pattern in patterns:
+            for m in re.finditer(pattern, log_text, re.IGNORECASE):
+                match_text = m.group(0).strip()
+                # Clean up function names — remove trailing (
+                if category == "function_names":
+                    match_text = match_text.rstrip("(").strip()
+                if match_text and match_text not in seen[category]:
+                    seen[category].add(match_text)
+                    result[category].append(match_text)
+
+    # Also extract lines that look like error/warning/fatal messages
+    error_lines = []
+    for line in log_text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(
+            r'\b(error|err|fail|fatal|crash|exception|segfault|abort|panic|warning|warn)\b',
+            line, re.IGNORECASE,
+        ):
+            error_lines.append(line[:300])  # truncate long lines
+
+    result["error_lines"] = error_lines[:50]  # cap at 50 lines
+
+    return result
+
+
+# =========================================================================
+# STEP 2: LLM Semantic Expansion (Qwen local)
+# =========================================================================
+async def llm_expand_keywords(
+    structured: dict, bug_desc: str, api_key: str = "",
+) -> dict:
+    """Step 2: Use LLM to expand keywords with semantic understanding.
+
+    Uses the configured cloud LLM (or local Ollama as fallback).
+    Takes structured extraction from Step 1, asks LLM to produce:
+      - exact: precise search terms (from log, high confidence)
+      - semantic: related terms, synonyms, module names (for vector search)
+      - summary: concise problem description
+    """
+    # Prefer cloud LLM config; fall back to Ollama
+    llm_cfg = load_llm_config()
+    if llm_cfg.get("provider") == "ollama":
+        # Ollama reasoning model returns empty content — use shorter prompt
+        base_url = OLLAMA_URL + "/v1"
+        key = ""
+        model = OLLAMA_MODEL
+        max_tok = 4096
+    else:
+        base_url = llm_cfg["base_url"]
+        key = api_key or llm_cfg.get("api_key", "")
+        model = llm_cfg["model"]
+        max_tok = 4096
+
+    # Build context from Step 1 results (truncate to avoid overwhelming LLM)
+    parts = []
+    if structured["error_codes"]:
+        parts.append(f"Error codes: {', '.join(structured['error_codes'][:20])}")
+    if structured["function_names"]:
+        parts.append(f"Functions: {', '.join(structured['function_names'][:20])}")
+    if structured["file_paths"]:
+        parts.append(f"Files: {', '.join(structured['file_paths'][:15])}")
+    if structured["exceptions"]:
+        parts.append(f"Exceptions: {', '.join(structured['exceptions'][:15])}")
+    if structured["error_lines"]:
+        parts.append(f"Error lines:\n" + "\n".join(structured["error_lines"][:15]))
+
+    extracted_context = "\n".join(parts)
+
+    prompt = f"""你是一個 C/C++ 嵌入式系統（MFP 印表機）的 Bug 分析助手。
+請根據以下的 Bug 描述和從 Log 中萃取出的結構化資訊，產生搜尋關鍵字。
+
+## Bug 描述
+{bug_desc}
+
+## Log 結構化萃取結果
+{extracted_context}
+
+## 任務
+請產生用來搜尋原始碼的關鍵字，分為兩類：
+
+1. **exact**：精確匹配的關鍵字（error code、function name、變數名稱、macro 名稱），
+   這些關鍵字必須能在程式碼中直接找到。最多 15 個。
+2. **semantic**：語意相關的關鍵字（相關模組名稱、同義詞、功能描述詞），
+   用來做語意搜尋，找到字面上不同但概念相關的程式碼。最多 10 個。
+3. **summary**：用一句話（50 字以內）描述這個 Bug 的核心問題。
+
+請「只」回覆 JSON，不要加任何其他文字或 markdown code block：
+{{"exact": ["keyword1", "keyword2"], "semantic": ["related1", "related2"], "summary": "核心問題描述"}}"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        resp = await call_llm_sync(
+            base_url, key, model,
+            messages, temperature=0.1, max_tokens=max_tok, timeout=90,
+        )
+        # Handle reasoning models that put answer in reasoning field
+        if not resp.strip():
+            resp = "[]"
+        # Parse JSON from response
+        resp = resp.strip()
+        if resp.startswith("```"):
+            resp = re.sub(r'^```\w*\n?', '', resp)
+            resp = re.sub(r'\n?```$', '', resp)
+        # Try to extract JSON object — handle truncated JSON
+        json_match = re.search(r'\{.*\}', resp, re.DOTALL)
+        if json_match:
+            resp = json_match.group(0)
+            # Fix truncated JSON: close open brackets
+            open_brackets = resp.count('[') - resp.count(']')
+            open_braces = resp.count('{') - resp.count('}')
+            if open_brackets > 0 or open_braces > 0:
+                resp = resp.rstrip().rstrip(',') + ']' * max(0, open_brackets) + '}' * max(0, open_braces)
+        expanded = json.loads(resp)
+        return {
+            "summary": expanded.get("summary", bug_desc[:100]),
+            "exact": expanded.get("exact", []),
+            "semantic": expanded.get("semantic", []),
+            "structured": structured,
+        }
+    except Exception as e:
+        # Fallback: use regex results directly
+        exact = (
+            structured.get("error_codes", [])
+            + structured.get("function_names", [])[:10]
+            + structured.get("exceptions", [])[:5]
+        )
+        semantic = structured.get("file_paths", [])[:5]
+        return {
+            "summary": bug_desc[:100],
+            "exact": exact,
+            "semantic": semantic,
+            "structured": structured,
+            "error": str(e),
+        }
+
+
+# =========================================================================
+# STEP 3: Hybrid Search (Keyword grep + Qdrant vector → RRF fusion)
+# =========================================================================
+async def vector_search(query: str, top_k: int = 15) -> list[dict]:
+    """Search code using Qdrant vector similarity."""
+    try:
+        retriever = get_retriever(similarity_top_k=top_k)
+        query_bundle = QueryBundle(query_str=query)
+        loop = asyncio.get_event_loop()
+        nodes = await loop.run_in_executor(None, retriever.retrieve, query_bundle)
+
+        results = []
+        for node in nodes:
+            results.append({
+                "file_path": node.metadata.get("file_path", "unknown"),
+                "file_name": node.metadata.get("file_name", "unknown"),
+                "language": node.metadata.get("language", "unknown"),
+                "start_line": node.metadata.get("start_line", 0),
+                "end_line": node.metadata.get("end_line", 0),
+                "text": node.text[:800],
+                "score": node.score if hasattr(node, "score") else None,
+                "source": "vector",
+            })
+        return results
+    except Exception as e:
+        return [{"source": "vector", "error": str(e)}]
+
+
+async def keyword_search(
+    keywords: list[str], source_dir: str = SOURCE_DIR, max_results: int = 15,
+) -> list[dict]:
+    """Search source code using grep for exact keyword matches."""
+    results = []
+    seen_files = {}  # file_path → best rank
+
+    root = Path(source_dir)
+    if not root.exists():
+        return []
+
+    for kw in keywords[:10]:  # limit to 10 keywords to avoid flooding
+        kw_safe = re.escape(kw)
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _grep():
+                matches = []
+                for fpath in root.rglob("*"):
+                    if not fpath.is_file():
+                        continue
+                    if fpath.suffix.lower() not in {
+                        ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx",
+                    }:
+                        continue
+                    try:
+                        content = fpath.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    for i, line in enumerate(content.split("\n"), 1):
+                        if re.search(kw_safe, line, re.IGNORECASE):
+                            rel = str(fpath.relative_to(root))
+                            matches.append((rel, i, line.strip()[:200], fpath.name))
+                            if len(matches) >= 5:
+                                return matches
+                return matches
+
+            matches = await loop.run_in_executor(None, _grep)
+
+            for rel_path, line_no, line_text, fname in matches:
+                if rel_path not in seen_files or seen_files[rel_path] > len(results):
+                    seen_files[rel_path] = len(results)
+                    # Read surrounding context
+                    fpath = root / rel_path
+                    try:
+                        content = fpath.read_text(encoding="utf-8", errors="replace")
+                        lines = content.split("\n")
+                        start = max(0, line_no - 5)
+                        end = min(len(lines), line_no + 10)
+                        snippet = "\n".join(lines[start:end])[:800]
+                    except Exception:
+                        snippet = line_text
+
+                    results.append({
+                        "file_path": rel_path,
+                        "file_name": fname,
+                        "language": "c" if rel_path.endswith((".c", ".h")) else "cpp",
+                        "start_line": start + 1,
+                        "end_line": end,
+                        "text": snippet,
+                        "score": 1.0,  # exact match
+                        "source": "keyword",
+                        "matched_keyword": kw,
+                    })
+                    if len(results) >= max_results:
+                        break
+        except Exception:
+            continue
+        if len(results) >= max_results:
+            break
+
+    return results
+
+
+def rrf_fuse(
+    vector_results: list[dict],
+    keyword_results: list[dict],
+    k: int = 60,
+) -> list[dict]:
+    """Reciprocal Rank Fusion: merge vector + keyword search results."""
+    scores = defaultdict(float)
+    meta = {}  # file_path → result dict
+
+    for rank, r in enumerate(vector_results):
+        key = r.get("file_path", f"vec_{rank}")
+        scores[key] += 1.0 / (k + rank + 1)
+        if key not in meta or r.get("score"):
+            meta[key] = r
+
+    for rank, r in enumerate(keyword_results):
+        key = r.get("file_path", f"kw_{rank}")
+        scores[key] += 1.0 / (k + rank + 1)
+        # Prefer keyword results (they have context snippets)
+        if key not in meta or r.get("matched_keyword"):
+            meta[key] = r
+        # Merge source info
+        if "matched_keyword" in r:
+            meta[key]["matched_keyword"] = r.get("matched_keyword", "")
+
+    # Sort by RRF score descending
+    sorted_keys = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+    fused = []
+    for key in sorted_keys:
+        item = dict(meta[key])
+        item["rrf_score"] = round(scores[key], 6)
+        fused.append(item)
+
+    return fused
+
+
+async def hybrid_search(
+    exact_keywords: list[str],
+    semantic_keywords: list[str],
+    summary: str,
+    top_k: int = 15,
+) -> list[dict]:
+    """Step 3: Hybrid search — keyword grep + vector search, fused with RRF."""
+    # Run both searches in parallel
+    kw_task = keyword_search(exact_keywords, max_results=top_k)
+
+    # Build vector query from semantic keywords + summary
+    vector_query_parts = semantic_keywords + [summary]
+    vector_query = " ".join(vector_query_parts[:10])
+    vec_task = vector_search(vector_query, top_k=top_k)
+
+    kw_results, vec_results = await asyncio.gather(kw_task, vec_task)
+
+    # Handle errors
+    if kw_results and isinstance(kw_results[0], dict) and "error" in kw_results[0]:
+        kw_results = []
+    if vec_results and isinstance(vec_results[0], dict) and "error" in vec_results[0]:
+        vec_results = []
+
+    # Fuse results
+    fused = rrf_fuse(vec_results, kw_results)
+
+    return fused[:top_k], len(kw_results), len(vec_results)
+
+
+# =========================================================================
+# STEP 4: Deep Analysis (Cloud LLM — streaming)
+# =========================================================================
+async def deep_analysis(
+    search_results: list[dict], cleaned_log: dict, bug_desc: str,
+    api_key: str = "",
+) -> str:
+    """Use cloud LLM for deep analysis of search results (non-streaming)."""
+    llm_cfg = load_llm_config()
+
+    context_parts = []
+    for i, r in enumerate(search_results, 1):
+        context_parts.append(
+            f"### Result {i}: {r['file_path']} (score: {r.get('rrf_score', r.get('score', 'N/A'))})\n"
+            f"```{r.get('language', 'c')}\n{r['text']}\n```"
+        )
+    code_context = "\n\n".join(context_parts)
+
+    safe_context = sanitize_for_cloud(code_context)
+    safe_log = sanitize_for_cloud(cleaned_log.get("summary", ""))
+    safe_desc = sanitize_for_cloud(bug_desc)
+
+    prompt = f"""你是 Avision 軟體部門的資深 RCA (Root Cause Analysis) 工程師。
+
+## Bug 描述
+{safe_desc}
+
+## 問題摘要
+{safe_log}
+
+## 精確關鍵字
+{json.dumps(cleaned_log.get('exact', []), ensure_ascii=False)}
+
+## 相關程式碼片段（按相關度排序）
+{safe_context}
+
+## 任務
+請進行深度的 Root Cause Analysis，包含：
+1. **根本原因**：解釋為什麼會出現這個 Bug
+2. **受影響的檔案與行號**：列出需要修改的具體位置
+3. **修復建議**：提供具體的程式碼修改建議
+4. **驗證方法**：如何確認修復有效
+
+請用繁體中文回覆，程式碼片段用 markdown code block 標示。"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        return await call_llm_sync(
+            llm_cfg["base_url"],
+            api_key or llm_cfg.get("api_key", ""),
+            llm_cfg["model"],
+            messages, temperature=0.3, max_tokens=4096, timeout=180,
+        )
+    except Exception as e:
+        return f"⚠️ 深度分析失敗: {e}"
+
+
+# =========================================================================
+# Full Pipeline (streaming)
+# =========================================================================
+async def full_rca_stream(
+    log_text: str, bug_desc: str, api_key: str = "", top_k: int = 15,
+) -> AsyncGenerator[str, None]:
+    """Full 5-step RCA pipeline with streaming output."""
+
+    # ── Step 0: Rule-based log deduplication ──────────────────────
+    yield json.dumps({
+        "type": "status",
+        "text": f"📝 Step 0/5: Log 去重壓縮（{len(log_text):,} chars）...",
+    }) + "\n"
+
+    condensed_log = condense_log(log_text, bug_desc, api_key)
+    original_lines = len(log_text.split('\n'))
+    condensed_lines = len(condensed_log.split('\n'))
+    reduction = condensed_lines / max(original_lines, 1) * 100
+
+    yield json.dumps({
+        "type": "step0_result",
+        "data": {
+            "original_lines": original_lines,
+            "condensed_lines": condensed_lines,
+            "reduction_pct": round(100 - reduction, 1),
+            "condensed_log": condensed_log[:50000],
+        },
+    }) + "\n"
+    yield json.dumps({
+        "type": "status",
+        "text": (
+            f"  ✅ Log 精簡完成：{len(log_text):,} → {len(condensed_log):,} chars"
+            f"（縮減 {100 - reduction:.1f}%）"
+        ),
+    }) + "\n"
+
+    # Use condensed log for all subsequent steps
+    log_text = condensed_log
+
+    # ── Step 1: Regex extraction ──────────────────────────────────
+    yield json.dumps({
+        "type": "status",
+        "text": "🔧 Step 1/5: 從精簡 Log 中萃取結構化資訊（Error codes, Functions, Files）...",
+    }) + "\n"
+
+    structured = extract_structured_log(log_text)
+
+    total_extracted = sum(len(v) for v in structured.values() if isinstance(v, list))
+    yield json.dumps({
+        "type": "step1_result",
+        "data": {
+            "error_codes": structured["error_codes"],
+            "function_names": structured["function_names"],
+            "file_paths": structured["file_paths"],
+            "exceptions": structured["exceptions"],
+            "memory_addresses": structured.get("memory_addresses", []),
+            "error_lines": structured["error_lines"][:200],
+            "error_lines_count": len(structured["error_lines"]),
+        },
+    }) + "\n"
+    yield json.dumps({
+        "type": "status",
+        "text": f"  ✅ 萃取到 {total_extracted} 個結構化元素",
+    }) + "\n"
+
+    # ── Step 2: LLM semantic expansion ───────────────────────────
+    yield json.dumps({
+        "type": "status",
+        "text": "🧠 Step 2/5: 語意擴充（同義詞、相關模組）...",
+    }) + "\n"
+
+    expanded = await llm_expand_keywords(structured, bug_desc, api_key)
+
+    yield json.dumps({
+        "type": "step2_result",
+        "data": {
+            "summary": expanded["summary"],
+            "exact": expanded["exact"],
+            "semantic": expanded["semantic"],
+        },
+    }) + "\n"
+    yield json.dumps({
+        "type": "status",
+        "text": (
+            f"  ✅ 精確關鍵字 {len(expanded['exact'])} 個，"
+            f"語意關鍵字 {len(expanded['semantic'])} 個"
+        ),
+    }) + "\n"
+
+    # ── Step 3: Hybrid search ────────────────────────────────────
+    yield json.dumps({
+        "type": "status",
+        "text": "🔎 Step 3/5: Hybrid Search（Keyword grep + Vector 語意搜尋 → RRF 融合）...",
+    }) + "\n"
+
+    fused_results, kw_count, vec_count = await hybrid_search(
+        exact_keywords=expanded["exact"],
+        semantic_keywords=expanded["semantic"],
+        summary=expanded["summary"],
+        top_k=top_k,
+    )
+
+    yield json.dumps({
+        "type": "step3_result",
+        "data": {
+            "keyword_matches": kw_count,
+            "vector_matches": vec_count,
+            "fused_results": fused_results[:15],
+        },
+    }) + "\n"
+    yield json.dumps({
+        "type": "status",
+        "text": (
+            f"  ✅ Keyword: {kw_count} 筆 / Vector: {vec_count} 筆 / "
+            f"RRF 融合: {len(fused_results)} 筆"
+        ),
+    }) + "\n"
+
+    # ── Step 4: Cloud LLM deep analysis ──────────────────────────
+    yield json.dumps({
+        "type": "status",
+        "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
+    }) + "\n"
+
+    llm_cfg = load_llm_config()
+
+    # Build context from top fused results
+    context_parts = []
+    for i, r in enumerate(fused_results[:top_k], 1):
+        context_parts.append(
+            f"### Result {i}: {r['file_path']} (RRF: {r.get('rrf_score', 'N/A')})\n"
+            f"```{r.get('language', 'c')}\n{r['text']}\n```"
+        )
+    code_context = "\n\n".join(context_parts)
+    safe_context = sanitize_for_cloud(code_context)
+    safe_summary = sanitize_for_cloud(expanded["summary"])
+    safe_desc = sanitize_for_cloud(bug_desc)
+
+    prompt = f"""你是 Avision 軟體部門的資深 RCA 工程師。
+
+## Bug 描述
+{safe_desc}
+
+## 問題摘要
+{safe_summary}
+
+## Regex 萃取的精確關鍵字
+{json.dumps(expanded['exact'], ensure_ascii=False)}
+
+## 語意擴充關鍵字
+{json.dumps(expanded['semantic'], ensure_ascii=False)}
+
+## 相關程式碼片段（RRF 融合排序）
+{safe_context}
+
+## 任務
+請進行 Root Cause Analysis：
+1. **根本原因**：為什麼會出現這個 Bug
+2. **受影響檔案與行號**：需修改的具體位置
+3. **修復建議**：具體的程式碼修改建議
+4. **驗證方法**：如何確認修復有效
+
+用繁體中文回覆，程式碼用 markdown code block。"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    async for chunk in call_llm_stream(
+        llm_cfg["base_url"],
+        api_key or llm_cfg.get("api_key", ""),
+        llm_cfg["model"],
+        messages, temperature=0.3, max_tokens=4096, timeout=180,
+    ):
+        yield chunk
+
+    yield json.dumps({"type": "done"}) + "\n"
