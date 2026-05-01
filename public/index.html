@@ -124,10 +124,10 @@ a:hover { text-decoration: underline; }
 .main {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 2fr 3fr;
   gap: 1.25rem;
   padding: 1.25rem 1.5rem;
-  max-width: 1600px;
+  max-width: 1800px;
   margin: 0 auto;
   width: 100%;
 }
@@ -314,36 +314,80 @@ textarea.bug-desc {
 
 /* Search results */
 .search-result-item {
-  padding: .65rem .75rem;
   border-bottom: 1px solid var(--border);
   transition: var(--transition);
-  cursor: default;
 }
 .search-result-item:last-child { border-bottom: none; }
-.search-result-item:hover { background: var(--bg-hover); }
+.search-result-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .6rem .75rem;
+  cursor: pointer;
+  transition: var(--transition);
+  user-select: none;
+}
+.search-result-header:hover { background: var(--bg-hover); }
+.search-result-arrow {
+  font-size: .6rem;
+  color: var(--text-muted);
+  transition: transform .2s ease;
+  flex-shrink: 0;
+}
+.search-result-item.open .search-result-arrow { transform: rotate(90deg); }
+.search-result-header-left {
+  flex: 1;
+  min-width: 0;
+}
 .search-result-path {
   font-family: var(--mono);
   font-size: .75rem;
   color: var(--cyan);
-  margin-bottom: .25rem;
   word-break: break-all;
-}
-.search-result-text {
-  font-size: .8rem;
-  color: var(--text-secondary);
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .search-result-meta {
   display: flex;
   gap: .75rem;
   font-size: .7rem;
   color: var(--text-muted);
-  margin-top: .3rem;
+  margin-top: .15rem;
 }
+.search-result-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .25s ease;
+}
+.search-result-item.open .search-result-body {
+  max-height: 600px;
+}
+.search-result-text {
+  padding: 0 .75rem .65rem 1.6rem;
+  font-size: .8rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-left: 2px solid var(--border);
+  margin-left: 1rem;
+}
+/* Collapse all / Expand all */
+.search-actions {
+  display: flex;
+  gap: .4rem;
+  margin-left: auto;
+}
+.search-action-btn {
+  font-size: .68rem;
+  padding: .15rem .45rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font);
+  transition: var(--transition);
+}
+.search-action-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .score-bar {
   display: flex;
   align-items: center;
@@ -365,7 +409,54 @@ textarea.bug-desc {
 .score-bar-fill.medium { background: var(--orange); }
 .score-bar-fill.low { background: var(--red); }
 
-/* Analysis card */
+/* Analysis card — split thinking + content */
+.analysis-split {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 0;
+  min-height: 200px;
+}
+.analysis-split.thinking-only {
+  grid-template-columns: 1fr;
+}
+.thinking-panel {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+.thinking-panel-header {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .55rem .75rem;
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.thinking-panel-header .spinner { width: 10px; height: 10px; border-width: 1.5px; }
+.thinking-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: .6rem .75rem;
+  font-size: .78rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+}
+.result-panel {
+  overflow-y: auto;
+  max-height: 70vh;
+  padding: 1rem;
+}
+.analysis-split.thinking-only .thinking-panel {
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+}
 .thinking-toggle {
   display: flex;
   align-items: center;
@@ -608,6 +699,115 @@ textarea.bug-desc {
 }
 .status-line .spinner { width: 12px; height: 12px; border-width: 1.5px; }
 
+/* ========== PIPELINE PROGRESS BAR ========== */
+.pipeline-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 10px 0 4px 0;
+  padding: 0 8px;
+}
+.pipeline-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  position: relative;
+  z-index: 1;
+}
+.pipeline-step .step-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  border: 2px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  transition: all .3s ease;
+  position: relative;
+}
+.pipeline-step .step-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: color .3s ease;
+}
+/* Connector line between steps */
+.pipeline-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 14px;
+  left: calc(50% + 14px);
+  width: calc(100% - 28px);
+  height: 2px;
+  background: var(--border);
+  z-index: -1;
+  transition: background .3s ease;
+}
+/* Active (currently running) */
+.pipeline-step.active .step-circle {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  color: var(--accent);
+  animation: stepPulse 1.5s ease-in-out infinite;
+}
+.pipeline-step.active .step-label {
+  color: var(--accent);
+}
+.pipeline-step.active:not(:last-child)::after {
+  background: var(--accent);
+  animation: connectorPulse 1.5s ease-in-out infinite;
+}
+/* Done */
+.pipeline-step.done .step-circle {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+}
+.pipeline-step.done .step-label {
+  color: var(--green);
+}
+.pipeline-step.done:not(:last-child)::after {
+  background: var(--green);
+}
+/* Error */
+.pipeline-step.error .step-circle {
+  border-color: var(--red);
+  background: var(--red-bg);
+  color: var(--red);
+}
+.pipeline-step.error .step-label {
+  color: var(--red);
+}
+
+@keyframes stepPulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { box-shadow: 0 0 0 6px transparent; }
+}
+@keyframes connectorPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Elapsed timer */
+.pipeline-timer {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.pipeline-timer span {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ========== FOOTER ========== */
 .footer {
   text-align: center;
@@ -723,9 +923,33 @@ textarea.bug-desc {
           <div class="status-line">
             <span class="spinner"></span>
             <span id="analyzeStatusText">正在分析中...</span>
+            <span class="pipeline-timer" id="pipelineTimer" style="margin-left:auto;"></span>
           </div>
-          <!-- 5-step pipeline progress -->
-          <div id="stepsContainer" style="margin-top:10px;display:flex;flex-direction:column;gap:4px;"></div>
+          <!-- Pipeline visual progress -->
+          <div class="pipeline-progress" id="pipelineProgress">
+            <div class="pipeline-step" id="pStep0">
+              <div class="step-circle">0</div>
+              <div class="step-label">去重</div>
+            </div>
+            <div class="pipeline-step" id="pStep1">
+              <div class="step-circle">1</div>
+              <div class="step-label">萃取</div>
+            </div>
+            <div class="pipeline-step" id="pStep2">
+              <div class="step-circle">2</div>
+              <div class="step-label">語意</div>
+            </div>
+            <div class="pipeline-step" id="pStep3">
+              <div class="step-circle">3</div>
+              <div class="step-label">搜尋</div>
+            </div>
+            <div class="pipeline-step" id="pStep4">
+              <div class="step-circle">4</div>
+              <div class="step-label">RCA</div>
+            </div>
+          </div>
+          <!-- 5-step pipeline results -->
+          <div id="stepsContainer" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;"></div>
         </div>
       </div>
     </div>
@@ -750,25 +974,34 @@ textarea.bug-desc {
   <div class="column">
     <!-- Search Results -->
     <div class="card hidden" id="searchCard">
-      <div class="card-header"><span class="emoji">📄</span> 搜尋結果 <span id="searchCount" class="version" style="margin-left:auto;"></span></div>
+      <div class="card-header">
+        <span class="emoji">📄</span> 搜尋結果
+        <div class="search-actions" id="searchActions" style="display:none;">
+          <button class="search-action-btn" id="btnExpandAll">展開全部</button>
+          <button class="search-action-btn" id="btnCollapseAll">摺疊全部</button>
+        </div>
+        <span id="searchCount" class="version" style="margin-left:auto;"></span>
+      </div>
       <div class="card-body collapsible" id="searchBody"></div>
     </div>
 
     <!-- Analysis Result -->
     <div class="card hidden" id="analysisCard">
       <div class="card-header"><span class="emoji">🤖</span> AI 分析</div>
-      <div class="card-body">
-        <div id="thinkingSection" class="hidden">
-          <div class="thinking-toggle" id="thinkingToggle">
-            <span class="arrow">▶</span>
-            <span>思考過程</span>
+      <div class="card-body" style="padding:0;">
+        <div class="analysis-split thinking-only" id="analysisSplit">
+          <div class="thinking-panel hidden" id="thinkingPanel">
+            <div class="thinking-panel-header">
+              <span class="spinner" id="thinkingSpinner" style="display:none;"></span>
+              <span>💭 思考過程</span>
+            </div>
+            <div class="thinking-panel-body" id="thinkingPanelBody"></div>
           </div>
-          <div class="thinking-block" id="thinkingBlock">
-            <div class="thinking-content" id="thinkingContent"></div>
+          <div class="result-panel">
+            <div class="analysis-content" id="analysisContent">
+              <div class="result-placeholder">等待分析結果...</div>
+            </div>
           </div>
-        </div>
-        <div class="analysis-content" id="analysisContent">
-          <div class="result-placeholder">等待分析結果...</div>
         </div>
       </div>
     </div>
@@ -876,10 +1109,11 @@ textarea.bug-desc {
   const searchBody = $('searchBody');
   const analysisCard = $('analysisCard');
   const analysisContent = $('analysisContent');
-  const thinkingSection = $('thinkingSection');
-  const thinkingToggle = $('thinkingToggle');
-  const thinkingBlock = $('thinkingBlock');
-  const thinkingContent = $('thinkingContent');
+  const analysisSplit = $('analysisSplit');
+  const thinkingPanel = $('thinkingPanel');
+  const thinkingPanelBody = $('thinkingPanelBody');
+  const thinkingSpinner = $('thinkingSpinner');
+  const searchActions = $('searchActions');
   const placeholderCard = $('placeholderCard');
   const btnSettings = $('btnSettings');
   const settingsModal = $('settingsModal');
@@ -898,6 +1132,8 @@ textarea.bug-desc {
   let currentController = null;
   let isAnalyzing = false;
   let analysisRawText = '';  // accumulate raw markdown for full re-render
+  let pipelineStartTime = 0;
+  let pipelineTimerInterval = null;
 
   // ===== TOAST =====
   function showToast(msg, type = 'info') {
@@ -906,6 +1142,48 @@ textarea.bug-desc {
     t.textContent = msg;
     $('toastContainer').appendChild(t);
     setTimeout(() => { t.style.opacity = '0'; t.style.transition = '.3s'; setTimeout(() => t.remove(), 300); }, 3000);
+  }
+
+  // ===== PIPELINE PROGRESS HELPERS =====
+  function startPipelineTimer() {
+    pipelineStartTime = Date.now();
+    $('pipelineTimer').textContent = '';
+    pipelineTimerInterval = setInterval(function() {
+      var elapsed = Math.floor((Date.now() - pipelineStartTime) / 1000);
+      var min = Math.floor(elapsed / 60);
+      var sec = elapsed % 60;
+      $('pipelineTimer').innerHTML = '⏱ <span>' + (min > 0 ? min + 'm ' : '') + sec + 's</span>';
+    }, 1000);
+  }
+  function stopPipelineTimer() {
+    if (pipelineTimerInterval) {
+      clearInterval(pipelineTimerInterval);
+      pipelineTimerInterval = null;
+    }
+    // Keep final time visible
+  }
+  function resetPipelineProgress() {
+    for (var i = 0; i < 5; i++) {
+      var el = $('pStep' + i);
+      el.className = 'pipeline-step';
+    }
+    stopPipelineTimer();
+    $('pipelineTimer').textContent = '';
+  }
+  function setPipelineStep(stepNum, state) {
+    // stepNum: 0-4, state: 'active', 'done', 'error'
+    var el = $('pStep' + stepNum);
+    if (!el) return;
+    el.className = 'pipeline-step ' + state;
+    // If a step becomes active, mark previous ones as done
+    if (state === 'active') {
+      for (var i = 0; i < stepNum; i++) {
+        var prev = $('pStep' + i);
+        if (prev && !prev.classList.contains('done')) {
+          prev.className = 'pipeline-step done';
+        }
+      }
+    }
   }
 
   // ===== HEALTH CHECK =====
@@ -1015,17 +1293,19 @@ textarea.bug-desc {
     analyzeStatusText.textContent = '正在分析中...';
 
     // Reset results
-    stepsContainer.innerHTML = '';
+    resetPipelineProgress();
+    startPipelineTimer();
     searchCard.classList.add('hidden');
+    searchActions.style.display = 'none';
     analysisCard.classList.remove('hidden');
     analysisCard.classList.add('fade-in');
     analysisContent.innerHTML = '';
     analysisRawText = '';
     analysisContent.classList.add('streaming-cursor');
-    thinkingSection.classList.add('hidden');
-    thinkingContent.textContent = '';
-    thinkingBlock.classList.remove('open');
-    thinkingToggle.classList.remove('open');
+    analysisSplit.classList.add('thinking-only');
+    thinkingPanel.classList.add('hidden');
+    thinkingPanelBody.textContent = '';
+    thinkingSpinner.style.display = 'none';
     placeholderCard.classList.add('hidden');
 
     currentController = new AbortController();
@@ -1089,6 +1369,7 @@ textarea.bug-desc {
       analyzeIcon.innerHTML = '🔍';
       analyzeText.textContent = '開始分析';
       analyzeStatus.classList.add('hidden');
+      stopPipelineTimer();
       analysisContent.classList.remove('streaming-cursor');
     }
   }
@@ -1119,9 +1400,21 @@ textarea.bug-desc {
     switch (evt.type) {
       case 'status':
         analyzeStatusText.textContent = evt.text || '處理中...';
+        // Drive pipeline progress from status text
+        var txt = (evt.text || '');
+        if (txt.includes('Step 0') && txt.includes('去重')) setPipelineStep(0, 'active');
+        else if (txt.includes('Step 1') || txt.includes('萃取')) setPipelineStep(1, 'active');
+        else if (txt.includes('Step 2') || txt.includes('語意')) setPipelineStep(2, 'active');
+        else if (txt.includes('Step 3') || txt.includes('Hybrid') || txt.includes('搜尋')) setPipelineStep(3, 'active');
+        else if (txt.includes('Step 4') || txt.includes('深度分析') || txt.includes('LLM')) setPipelineStep(4, 'active');
+        else if (txt.includes('分析完成') || txt.includes('✅')) {
+          // Don't change pipeline from generic ✅ messages
+        }
         break;
       // ── New 5-step pipeline events ──
       case 'step0_result':
+        setPipelineStep(0, 'done');
+        setPipelineStep(1, 'active');
         var d = evt.data;
         var badge = document.createElement('div');
         badge.className = 'step-badge';
@@ -1134,6 +1427,8 @@ textarea.bug-desc {
         if (blk0) stepsContainer.appendChild(blk0);
         break;
       case 'step1_result':
+        setPipelineStep(1, 'done');
+        setPipelineStep(2, 'active');
         renderStep1(evt.data);
         var b1 = document.createElement('div');
         b1.className = 'step-badge';
@@ -1164,6 +1459,8 @@ textarea.bug-desc {
         }
         break;
       case 'step2_result':
+        setPipelineStep(2, 'done');
+        setPipelineStep(3, 'active');
         renderStep2(evt.data);
         var b2 = document.createElement('div');
         b2.className = 'step-badge';
@@ -1186,6 +1483,8 @@ textarea.bug-desc {
         }
         break;
       case 'step3_result':
+        setPipelineStep(3, 'done');
+        setPipelineStep(4, 'active');
         renderSearchResults(evt.data.fused_results || []);
         if (evt.data.keyword_matches !== undefined) {
           searchCount.textContent =
@@ -1206,8 +1505,12 @@ textarea.bug-desc {
         renderSearchResults(evt.data);
         break;
       case 'thinking':
-        thinkingSection.classList.remove('hidden');
-        thinkingContent.textContent += evt.text || '';
+        analysisSplit.classList.remove('thinking-only');
+        thinkingPanel.classList.remove('hidden');
+        thinkingSpinner.style.display = '';
+        thinkingPanelBody.textContent += evt.text || '';
+        // Auto-scroll thinking panel
+        thinkingPanelBody.scrollTop = thinkingPanelBody.scrollHeight;
         break;
       case 'content':
         analysisRawText += (evt.text || '');
@@ -1216,8 +1519,11 @@ textarea.bug-desc {
         if (isAnalyzing) analysisContent.classList.add('streaming-cursor');
         break;
       case 'done':
+        setPipelineStep(4, 'done');
+        stopPipelineTimer();
         analyzeStatusText.textContent = '分析完成 ✓';
         analysisContent.classList.remove('streaming-cursor');
+        thinkingSpinner.style.display = 'none';
         showToast('分析完成', 'success');
         var b4 = document.createElement('div');
         b4.className = 'step-badge';
@@ -1244,26 +1550,49 @@ textarea.bug-desc {
     // Results now displayed in stepsContainer collapsible block
   }
 
-  // ===== RENDER SEARCH RESULTS =====
+  // ===== RENDER SEARCH RESULTS (collapsible) =====
   function renderSearchResults(results) {
     if (!results || !results.length) return;
     searchCard.classList.remove('hidden');
     searchCard.classList.add('fade-in');
+    searchActions.style.display = '';
     searchCount.textContent = results.length + ' 筆';
-    let html = '';
-    results.forEach(r => {
+    searchBody.innerHTML = '';
+    results.forEach((r, idx) => {
       const score = r.score ? (r.score * 100).toFixed(1) : '0';
       const scoreClass = score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low';
-      html += '<div class="search-result-item">';
-      html += '<div class="search-result-path">' + escapeHtml(r.file_path || r.file_name || '') + '</div>';
-      html += '<div class="search-result-text">' + escapeHtml(truncate(r.text || '', 300)) + '</div>';
-      html += '<div class="search-result-meta">';
-      if (r.language) html += '<span>' + escapeHtml(r.language) + '</span>';
-      html += '<span class="score-bar">相關度 <span class="score-bar-track"><span class="score-bar-fill ' + scoreClass + '" style="width:' + Math.min(score, 100) + '%"></span></span> ' + score + '%</span>';
-      html += '</div></div>';
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      item.dataset.idx = idx;
+
+      const header = document.createElement('div');
+      header.className = 'search-result-header';
+      header.innerHTML = '<span class="search-result-arrow">\u25B6</span>' +
+        '<div class="search-result-header-left">' +
+        '<div class="search-result-path">' + escapeHtml(r.file_path || r.file_name || '') + '</div>' +
+        '<div class="search-result-meta">' +
+        (r.language ? '<span>' + escapeHtml(r.language) + '</span>' : '') +
+        '<span class="score-bar">\u76F8\u95DC\u5EA6 <span class="score-bar-track"><span class="score-bar-fill ' + scoreClass + '" style="width:' + Math.min(score, 100) + '%"></span></span> ' + score + '%</span>' +
+        '</div></div>';
+      header.addEventListener('click', () => item.classList.toggle('open'));
+      item.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'search-result-body';
+      body.innerHTML = '<div class="search-result-text">' + escapeHtml(r.text || '') + '</div>';
+      item.appendChild(body);
+
+      searchBody.appendChild(item);
     });
-    searchBody.innerHTML = html;
   }
+
+  // Collapse all / Expand all
+  $('btnExpandAll').addEventListener('click', () => {
+    searchBody.querySelectorAll('.search-result-item').forEach(el => el.classList.add('open'));
+  });
+  $('btnCollapseAll').addEventListener('click', () => {
+    searchBody.querySelectorAll('.search-result-item').forEach(el => el.classList.remove('open'));
+  });
 
   // ===== QUICK SEARCH =====
   btnSearch.addEventListener('click', doSearch);
@@ -1525,12 +1854,6 @@ textarea.bug-desc {
     if (!e.target.closest('.model-dropdown')) {
       modelList.classList.remove('open');
     }
-  });
-
-  // ===== THINKING TOGGLE =====
-  thinkingToggle.addEventListener('click', () => {
-    thinkingToggle.classList.toggle('open');
-    thinkingBlock.classList.toggle('open');
   });
 
   // ===== MARKDOWN RENDERER (basic) =====

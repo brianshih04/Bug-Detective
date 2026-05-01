@@ -1,36 +1,153 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🐛 Bug-Detective
 
-## Getting Started
+AI 驅動的 Bug Root Cause Analysis（RCA）系統，為 Avision 軟體部門量身打造。  
+透過 5 步驟 Pipeline 自動分析 C/C++ 原始碼日誌，從錯誤日誌中萃取關鍵資訊、語意擴充關鍵字、混合搜尋程式碼庫，最終產出完整的根本原因分析報告。
 
-First, run the development server:
+## ✨ 特色
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **5 步驟 Pipeline** — 規則式 Log 去重 → Regex 結構化萃取 → LLM 語意擴充 → Hybrid Search（Keyword + Vector RRF 融合）→ 雲端 LLM 深度分析
+- **RAG 搜尋** — 基於 LlamaIndex + Qdrant 向量資料庫，結合關鍵字 grep 與語意向量搜尋，Reciprocal Rank Fusion（RRF）融合排序
+- **多 LLM Provider** — 支援 Ollama（本地）、z.ai GLM-5、OpenRouter、MiniMax，以及任何 OpenAI 相容 API
+- **串流即時回饋** — SSE 串流輸出，視覺化 Pipeline 進度條，每步驟即時顯示結果
+- **安全設計** — API Key 僅存於瀏覽器記憶體，從不寫入伺服器磁碟；上傳至雲端 LLM 前自動遮蔽 IP、Email、Token 等敏感資訊
+- **繁體中文介面** — 全中文 UI，分析報告以繁體中文產出
+
+## 🏗️ 系統架構
+
+```
+┌─────────────┐     HTTP/SSE      ┌──────────────┐
+│  Frontend    │ ◄──────────────► │  FastAPI      │
+│  (index.html)│     Port 17580   │  Backend      │
+└─────────────┘                   └──────┬───────┘
+                                         │
+                              ┌──────────┼──────────┐
+                              ▼          ▼          ▼
+                        ┌─────────┐ ┌────────┐ ┌──────────┐
+                        │ Qdrant  │ │ Ollama │ │ Cloud LLM│
+                        │ Vector  │ │ Embed  │ │ (GLM-5/  │
+                        │ DB      │ │ + LLM  │ │  OpenR)  │
+                        └─────────┘ └────────┘ └──────────┘
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📂 專案結構
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+bug-detective/
+├── backend/
+│   ├── server.py      # FastAPI 伺服器、API 路由、SSE 串流端點
+│   ├── rca.py         # 5 步驟 RCA Pipeline（Regex、LLM、Hybrid Search）
+│   ├── config.py      # 環境設定、LLM Presets、路徑管理
+│   ├── ingest.py      # 程式碼嵌入索引建置（LlamaIndex → Qdrant）
+│   ├── security.py    # 敏感資訊遮蔽（IP、Token、Email 等）
+│   └── __init__.py
+├── public/
+│   └── index.html     # 單頁前端（HTML + CSS + JS，無 Build 步驟）
+├── scripts/
+│   ├── build-index.py     # 程式碼索引建置（JSON grep 用）
+│   ├── build-embeddings.py# ONNX 嵌入索引建置
+│   └── embed-search.py    # 嵌入搜尋工具
+├── data/
+│   ├── code-index.json    # 程式碼索引（grep 用）
+│   ├── embeddings-meta.json
+│   ├── embeddings.npy
+│   └── llm-config.json    # LLM 設定（已 gitignore）
+├── .env                   # 環境變數（已 gitignore）
+├── deploy.sh              # DGX Spark 部署腳本
+├── Dockerfile             # Docker 容器化
+├── docker-compose.yml     # Docker Compose 設定
+└── .gitignore
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🚀 快速開始
 
-## Learn More
+### 環境需求
 
-To learn more about Next.js, take a look at the following resources:
+- Python 3.10+
+- Ollama（本地 LLM + Embedding）
+- Qdrant（向量資料庫）
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 安裝
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+# 1. Clone 專案
+git clone https://github.com/brianshih04/Bug-Detective.git
+cd Bug-Detective
 
-## Deploy on Vercel
+# 2. 建立 Python 虛擬環境並安裝依賴
+python3 -m venv venv
+source venv/bin/activate
+pip install fastapi uvicorn httpx pydantic qdrant-client llama-index llama-index-vector-stores-qdrant llama-index-embeddings-ollama python-dotenv
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+# 3. 啟動 Ollama 並拉取模型
+ollama pull qwen3-embedding:8b
+ollama pull qwen3.6:35b-a3b-200k
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+# 4. 啟動 Qdrant
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+
+# 5. 設定環境變數（或複製 .env.example）
+cp .env.example .env
+# 編輯 .env，設定 SOURCE_DIR 為你的 C/C++ 原始碼目錄
+```
+
+### 建置索引
+
+```bash
+# 將 C/C++ 原始碼建立向量嵌入索引
+python -m backend.ingest
+```
+
+### 啟動伺服器
+
+```bash
+# 開發模式
+python -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 --reload
+
+# 正式模式
+nohup venv/bin/python -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 > /tmp/bug-detective.log 2>&1 &
+```
+
+開啟瀏覽器訪問 `http://localhost:17580`
+
+## 🔧 環境變數
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `SOURCE_DIR` | `/home/avuser/infernoStart01` | C/C++ 原始碼目錄 |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant 伺服器 URL |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama 伺服器 URL |
+| `OLLAMA_MODEL` | `qwen3.6:35b-a3b-200k` | 預設本地 LLM 模型 |
+| `GLM5_BASE_URL` | `https://api.z.ai/api/coding/paas/v4` | z.ai GLM-5 API 位址 |
+| `GLM5_API_KEY` | — | z.ai API Key |
+| `GLM5_MODEL` | `glm-5-turbo` | 雲端 LLM 模型 |
+| `COLLECTION_NAME` | `infernoStart01` | Qdrant Collection 名稱 |
+| `EMBEDDING_MODEL` | `qwen3-embedding:8b` | 嵌入模型 |
+| `EMBEDDING_DIM` | `4096` | 嵌入向量維度 |
+| `PORT` | `17580` | 伺服器端口 |
+
+## 📊 5 步驟 RCA Pipeline
+
+| Step | 名稱 | 說明 | 成本 |
+|------|------|------|------|
+| **0** | Log 去重壓縮 | 三層過濾：黑名單過濾 → 模糊連續去重 → 全局高頻壓縮 | 零成本（規則式） |
+| **1** | 結構化萃取 | Regex 提取錯誤碼、函式名稱、檔案路徑、異常訊號、記憶體位址 | 零成本（Regex） |
+| **2** | 語意擴充 | LLM 將萃取結果擴充為精確關鍵字 + 語意關鍵字 | 1 次 LLM 呼叫 |
+| **3** | Hybrid Search | Keyword grep + Qdrant 向量搜尋 → RRF 融合排序 | 向量搜尋 |
+| **4** | 深度分析 | 雲端 LLM 根據搜尋結果產出完整 RCA 報告 | 1 次 LLM 呼叫（串流） |
+
+## 🔐 安全設計
+
+- **API Key** — 僅存於瀏覽器 JS 變數（`localStorage`），永不透過 API 回傳或寫入伺服器磁碟
+- **資料遮蔽** — 傳送至雲端 LLM 前，自動遮蔽：API Key、Bearer Token、內部 IP、Email、MAC Address
+- **CORS** — 開發階段允許所有來源；正式環境應設定 `allow_origins`
+- **設定檔** — `data/llm-config.json` 已加入 `.gitignore`，避免 API Key 洩漏
+
+## 🛠️ 開發
+
+詳細的開發指南請參考 [DEVELOPMENT.md](./DEVELOPMENT.md)。
+
+變更歷史請參考 [CHANGELOG.md](./CHANGELOG.md)。
+
+## 📝 授權
+
+內部使用專案 — Avision 軟體部門。
