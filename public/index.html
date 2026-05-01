@@ -1414,6 +1414,12 @@ textarea.bug-desc {
         }
         break;
       // ── New 5-step pipeline events ──
+      case 'pipeline_step':
+        setPipelineStep(evt.step, evt.state);
+        if (evt.detail && evt.state === 'done') {
+          analyzeStatusText.textContent += ' [' + evt.detail + ']';
+        }
+        break;
       case 'step0_result':
         setPipelineStep(0, 'done');
         setPipelineStep(1, 'active');

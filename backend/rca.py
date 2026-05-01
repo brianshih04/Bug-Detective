@@ -753,22 +753,37 @@ async def deep_analysis(
 # =========================================================================
 # Full Pipeline (streaming)
 # =========================================================================
+def _step_event(step: int, state: str, elapsed: float = None, detail: str = ""):
+    """Emit an explicit pipeline_step SSE event for the frontend."""
+    evt = {"type": "pipeline_step", "step": step, "state": state}
+    if elapsed is not None:
+        evt["elapsed"] = round(elapsed, 1)
+    if detail:
+        evt["detail"] = detail
+    return json.dumps(evt) + "\n"
+
+
 async def full_rca_stream(
     log_text: str, bug_desc: str, api_key: str = "", top_k: int = 15,
 ) -> AsyncGenerator[str, None]:
     """Full 5-step RCA pipeline with streaming output."""
+    t0 = time.time()
+    step_start = t0
 
     # ── Step 0: Rule-based log deduplication ──────────────────────
+    yield _step_event(0, "active", elapsed=0)
     yield json.dumps({
         "type": "status",
         "text": f"📝 Step 0/5: Log 去重壓縮（{len(log_text):,} chars）...",
     }) + "\n"
 
     condensed_log = condense_log(log_text, bug_desc, api_key)
+    now = time.time()
     original_lines = len(log_text.split('\n'))
     condensed_lines = len(condensed_log.split('\n'))
     reduction = condensed_lines / max(original_lines, 1) * 100
 
+    yield _step_event(0, "done", elapsed=now - step_start)
     yield json.dumps({
         "type": "step0_result",
         "data": {
@@ -788,8 +803,10 @@ async def full_rca_stream(
 
     # Use condensed log for all subsequent steps
     log_text = condensed_log
+    step_start = time.time()
 
     # ── Step 1: Regex extraction ──────────────────────────────────
+    yield _step_event(1, "active", elapsed=time.time() - t0)
     yield json.dumps({
         "type": "status",
         "text": "🔧 Step 1/5: 從精簡 Log 中萃取結構化資訊（Error codes, Functions, Files）...",
@@ -797,7 +814,9 @@ async def full_rca_stream(
 
     structured = extract_structured_log(log_text)
 
+    now = time.time()
     total_extracted = sum(len(v) for v in structured.values() if isinstance(v, list))
+    yield _step_event(1, "done", elapsed=now - step_start)
     yield json.dumps({
         "type": "step1_result",
         "data": {
@@ -814,8 +833,10 @@ async def full_rca_stream(
         "type": "status",
         "text": f"  ✅ 萃取到 {total_extracted} 個結構化元素",
     }) + "\n"
+    step_start = time.time()
 
     # ── Step 2: LLM semantic expansion ───────────────────────────
+    yield _step_event(2, "active", elapsed=time.time() - t0)
     yield json.dumps({
         "type": "status",
         "text": "🧠 Step 2/5: 語意擴充（同義詞、相關模組）...",
@@ -823,6 +844,9 @@ async def full_rca_stream(
 
     expanded = await llm_expand_keywords(structured, bug_desc, api_key)
 
+    now = time.time()
+    yield _step_event(2, "done", elapsed=now - step_start,
+                      detail=f"{len(expanded['exact'])} exact, {len(expanded['semantic'])} semantic")
     yield json.dumps({
         "type": "step2_result",
         "data": {
@@ -838,8 +862,10 @@ async def full_rca_stream(
             f"語意關鍵字 {len(expanded['semantic'])} 個"
         ),
     }) + "\n"
+    step_start = time.time()
 
     # ── Step 3: Hybrid search ────────────────────────────────────
+    yield _step_event(3, "active", elapsed=time.time() - t0)
     yield json.dumps({
         "type": "status",
         "text": "🔎 Step 3/5: Hybrid Search（Keyword grep + Vector 語意搜尋 → RRF 融合）...",
@@ -852,6 +878,9 @@ async def full_rca_stream(
         top_k=top_k,
     )
 
+    now = time.time()
+    yield _step_event(3, "done", elapsed=now - step_start,
+                      detail=f"KW:{kw_count} Vec:{vec_count} RRF:{len(fused_results)}")
     yield json.dumps({
         "type": "step3_result",
         "data": {
@@ -867,8 +896,10 @@ async def full_rca_stream(
             f"RRF 融合: {len(fused_results)} 筆"
         ),
     }) + "\n"
+    step_start = time.time()
 
     # ── Step 4: Cloud LLM deep analysis ──────────────────────────
+    yield _step_event(4, "active", elapsed=time.time() - t0)
     yield json.dumps({
         "type": "status",
         "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
@@ -924,4 +955,11 @@ async def full_rca_stream(
     ):
         yield chunk
 
+    total_elapsed = time.time() - t0
+    yield _step_event(4, "done", elapsed=time.time() - step_start,
+                      detail=f"總耗時 {total_elapsed:.1f}s")
+    yield json.dumps({
+        "type": "status",
+        "text": f"🎉 全部完成！總耗時 {total_elapsed:.1f} 秒",
+    }) + "\n"
     yield json.dumps({"type": "done"}) + "\n"
