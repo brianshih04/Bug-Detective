@@ -886,7 +886,7 @@ async def full_rca_stream(
         "data": {
             "keyword_matches": kw_count,
             "vector_matches": vec_count,
-            "fused_results": fused_results[:15],
+            "fused_results": fused_results[:top_k],
         },
     }) + "\n"
     yield json.dumps({
