@@ -122,28 +122,82 @@ async def call_llm_stream(
                 yield json.dumps({"type": "error", "text": error_msg}) + "\n"
                 return
             token_count = 0
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data.strip() == "[DONE]":
-                    if token_count > 0:
-                        usage = {"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}
-                        yield json.dumps(usage) + "\n"
-                    break
+            last_token_time = asyncio.get_event_loop().time()
+            KEEPALIVE_INTERVAL = 15  # seconds — send heartbeat to prevent Cloudflare timeout
+
+            async def _line_iter():
+                """Wrap aiter_lines with keepalive heartbeat injection."""
+                nonlocal last_token_time
+                async for line in resp.aiter_lines():
+                    last_token_time = asyncio.get_event_loop().time()
+                    yield line
+
+            async def _keepalive():
+                """Yield heartbeat comments every KEEPALIVE_INTERVAL seconds of silence."""
+                while True:
+                    await asyncio.sleep(KEEPALIVE_INTERVAL)
+                    now = asyncio.get_event_loop().time()
+                    if now - last_token_time >= KEEPALIVE_INTERVAL:
+                        yield ": keepalive\n"
+
+            # Merge line_iter with keepalive using asyncio.create_task + queue
+            line_queue: asyncio.Queue[str | None] = asyncio.Queue()
+            done_sent = False
+
+            async def _read_lines():
+                nonlocal done_sent
                 try:
-                    chunk = json.loads(data)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content", "")
-                    reasoning = delta.get("reasoning", "") or delta.get("reasoning_content", "")
-                    if reasoning:
-                        yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
-                        token_count += 1
-                    if content:
-                        yield json.dumps({"type": "content", "text": content}) + "\n"
-                        token_count += 1
-                except json.JSONDecodeError:
-                    continue
+                    async for line in _line_iter():
+                        await line_queue.put(line)
+                finally:
+                    if not done_sent:
+                        done_sent = True
+                        await line_queue.put(None)
+
+            async def _send_heartbeat():
+                while not done_sent:
+                    await asyncio.sleep(KEEPALIVE_INTERVAL)
+                    if not done_sent:
+                        now = asyncio.get_event_loop().time()
+                        if now - last_token_time >= KEEPALIVE_INTERVAL:
+                            await line_queue.put(": keepalive")
+
+            reader_task = asyncio.create_task(_read_lines())
+            heartbeat_task = asyncio.create_task(_send_heartbeat())
+
+            try:
+                while True:
+                    item = await asyncio.wait_for(line_queue.get(), timeout=KEEPALIVE_INTERVAL + 5)
+                    if item is None:
+                        break
+                    if item.startswith(":"):
+                        yield item + "\n"
+                        continue
+                    line = item
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        if token_count > 0:
+                            usage = {"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}
+                            yield json.dumps(usage) + "\n"
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
+                        reasoning = delta.get("reasoning", "") or delta.get("reasoning_content", "")
+                        if reasoning:
+                            yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
+                            token_count += 1
+                        if content:
+                            yield json.dumps({"type": "content", "text": content}) + "\n"
+                            token_count += 1
+                    except json.JSONDecodeError:
+                        continue
+            finally:
+                reader_task.cancel()
+                heartbeat_task.cancel()
     except httpx.TimeoutException:
         yield json.dumps({"type": "error", "text": f"LLM API 連線逾時（{timeout}s）"}) + "\n"
     except Exception as e:
