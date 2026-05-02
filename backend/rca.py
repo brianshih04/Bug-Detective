@@ -573,9 +573,9 @@ async def llm_expand_keywords(
 請產生用來搜尋原始碼的關鍵字，分為兩類：
 
 1. **exact**：精確匹配的關鍵字（error code、function name、變數名稱、macro 名稱），
-   這些關鍵字必須能在程式碼中直接找到。最多 15 個。
+   這些關鍵字必須能在程式碼中直接找到。最多 20 個。
 2. **semantic**：語意相關的關鍵字（相關模組名稱、同義詞、功能描述詞），
-   用來做語意搜尋，找到字面上不同但概念相關的程式碼。最多 10 個。
+   用來做語意搜尋，找到字面上不同但概念相關的程式碼。最多 20 個。
 3. **summary**：用一句話（50 字以內）描述這個 Bug 的核心問題。
 
 請「只」回覆 JSON，不要加任何其他文字或 markdown code block：
@@ -676,7 +676,7 @@ async def keyword_search(
 
     kw_index = get_keyword_index()
 
-    for kw in keywords[:10]:  # limit to 10 keywords
+    for kw in keywords[:20]:  # limit to 20 keywords
         try:
             # Tokenize keyword and look up each token in the index
             kw_tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", kw)
