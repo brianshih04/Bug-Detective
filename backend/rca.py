@@ -805,26 +805,31 @@ def _extract_keywords_from_drain(
     # === Semantic keywords ===
     semantic_set: set[str] = set()
 
-    # 1. From anomaly templates — take meaningful phrases (remove <*> wildcards)
-    for tmpl in anomaly_templates:
-        # Clean template: remove <*> and extra whitespace
-        clean = re.sub(r"<\*>", "", tmpl).strip()
-        # Take the cleaned template as a semantic phrase
-        if clean and len(clean) > 5:
-            semantic_set.add(clean[:60])
+    # 1. Module/component names from templates — take surrounding context
+    #    as a richer semantic phrase (e.g. "ImageProc driver initialization failed")
+    module_re = re.compile(
+        r"\b(?:module|component|device|sensor|task|thread|subsystem|unit|engine|"
+        r"handler|manager|controller|service|driver|interface|port|pipeline|"
+        r"buffer|queue|channel|register|memory|timer|interrupt|dma|clock)\b",
+        re.IGNORECASE,
+    )
+    for tmpl in template_texts:
+        for m in module_re.finditer(tmpl):
+            start = max(0, m.start() - 20)
+            end = min(len(tmpl), m.end() + 40)
+            context = tmpl[start:end].strip()
+            if context:
+                semantic_set.add(context[:80])
 
     # 2. Regex exceptions (concepts like "null pointer", "buffer overflow")
     for val in regex_result.get("exceptions", []):
         semantic_set.add(val.strip())
 
-    # 3. Module/component phrases from ALL templates (not just anomalies)
-    #    Pattern: look for compound identifiers like "ImageProc", "PrintEngine"
-    compound_re = re.compile(r"\b[a-zA-Z][a-zA-Z0-9]*(?:[_/\\][a-zA-Z][a-zA-Z0-9]*){0,2}\b")
-    for tmpl in template_texts:
-        for m in compound_re.finditer(tmpl):
-            token = m.group()
-            if _is_useful(token) and len(token) >= 4:
-                semantic_set.add(token)
+    # 3. Anomaly template phrases (cleaned of <*> wildcards)
+    for tmpl in anomaly_templates:
+        clean = re.sub(r"<\*>", "", tmpl).strip()
+        if clean and len(clean) > 5:
+            semantic_set.add(clean[:60])
 
     # 4. Bug description meaningful words
     for w in bug_desc.split():
