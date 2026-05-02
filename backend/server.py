@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from qdrant_client import QdrantClient
 
 import sys
@@ -32,6 +32,14 @@ class AnalyzeRequest(BaseModel):
     batch_size: int = 20  # files per batch in Step 4 (0 = no batching)
     max_tokens: int = 0  # 0 = use server default from llm-config
     timeout: int = 0  # 0 = use server default from llm-config
+
+    @field_validator("log_text")
+    @classmethod
+    def validate_log_text(cls, v: str) -> str:
+        max_len = 2_000_000  # ~2 MB
+        if len(v) > max_len:
+            raise ValueError(f"log_text too large ({len(v):,} chars, max {max_len:,})")
+        return v
 
 class SearchRequest(BaseModel):
     query: str

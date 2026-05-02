@@ -1,6 +1,7 @@
 """Configuration for bug-detective RAG system."""
 import os
 import json
+import time as _time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -22,8 +23,8 @@ OLLAMA_MODEL = _env("OLLAMA_MODEL", "qwen3.6:35b-a3b-200k")
 
 # GLM-5 Cloud
 GLM5_BASE_URL = _env("GLM5_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
-_gk = "GLM5" + chr(95) + "API" + chr(95) + "KEY"
-globals()["GLM5" + chr(95) + "API" + chr(95) + "KEY"] = _env(_gk)
+_gk = "GLM5_API_KEY"
+GLM5_API_KEY = _env(_gk)
 GLM5_MODEL = _env("GLM5_MODEL", "glm-5-turbo")
 
 # --- Server ---
@@ -36,6 +37,7 @@ EMBEDDING_DIM = int(_env("EMBEDDING_DIM", "4096"))
 
 # --- LLM Config (runtime, saved to JSON) ---
 LLM_CONFIG_PATH = DATA_DIR / "llm-config.json"
+_LLM_CONFIG_CACHE = {"data": None, "mtime": 0.0, "ttl": 5.0}
 
 DEFAULT_LLM_CONFIG = {
     "base_url": OLLAMA_URL + "/v1",
@@ -47,6 +49,10 @@ DEFAULT_LLM_CONFIG = {
 }
 
 def load_llm_config() -> dict:
+    now = _time.monotonic()
+    cache = _LLM_CONFIG_CACHE
+    if cache["data"] is not None and (now - cache["mtime"]) < cache["ttl"]:
+        return cache["data"]
     if LLM_CONFIG_PATH.exists():
         try:
             with open(LLM_CONFIG_PATH) as f:
@@ -59,16 +65,23 @@ def load_llm_config() -> dict:
                 if url.endswith(suffix):
                     cfg["base_url"] = url[: -len(suffix)]
                     break
+            cache["data"] = cfg
+            cache["mtime"] = _time.monotonic()
             return cfg
         except Exception:
             pass
-    return dict(DEFAULT_LLM_CONFIG)
+    result = dict(DEFAULT_LLM_CONFIG)
+    cache["data"] = result
+    cache["mtime"] = _time.monotonic()
+    return result
 
 def save_llm_config(cfg: dict) -> dict:
     LLM_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     merged = {**DEFAULT_LLM_CONFIG, **cfg}
     with open(LLM_CONFIG_PATH, "w") as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
+    _LLM_CONFIG_CACHE["data"] = merged
+    _LLM_CONFIG_CACHE["mtime"] = _time.monotonic()
     return merged
 
 LLM_PRESETS = {

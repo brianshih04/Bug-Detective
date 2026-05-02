@@ -7,6 +7,15 @@ from pathlib import Path
 # Server imports (needs backend on path)
 from server import app
 from fastapi.testclient import TestClient
+from backend.config import _LLM_CONFIG_CACHE
+
+
+@pytest.fixture(autouse=True)
+def _clear_config_cache():
+    """Clear TTL cache before each test to avoid cross-test pollution."""
+    _LLM_CONFIG_CACHE["data"] = None
+    _LLM_CONFIG_CACHE["mtime"] = 0.0
+    yield
 
 client = TestClient(app)
 
@@ -90,6 +99,28 @@ class TestStaticFiles:
     def test_404_for_missing_static(self):
         res = client.get("/static/nonexistent.js")
         assert res.status_code == 404
+
+
+class TestAnalyzeRequestValidation:
+    """Test input validation on /api/analyze."""
+
+    def test_log_text_too_large(self):
+        """log_text exceeding 2MB should be rejected."""
+        huge_log = "x" * 2_000_001
+        res = client.post("/api/analyze", json={
+            "log_text": huge_log,
+            "bug_description": "test",
+        })
+        assert res.status_code == 422
+
+    def test_log_text_within_limit(self):
+        """Normal-sized log_text should pass validation (may fail for other reasons)."""
+        res = client.post("/api/analyze", json={
+            "log_text": "some log content",
+            "bug_description": "test",
+        })
+        # Should NOT be a 422 validation error
+        assert res.status_code != 422
 
 
 class TestCORSPolicy:

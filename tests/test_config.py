@@ -7,6 +7,14 @@ from pathlib import Path
 import config
 
 
+@pytest.fixture(autouse=True)
+def _clear_config_cache():
+    """Clear TTL cache before each test to avoid cross-test pollution."""
+    config._LLM_CONFIG_CACHE["data"] = None
+    config._LLM_CONFIG_CACHE["mtime"] = 0.0
+    yield
+
+
 class TestLoadLlmConfig:
     """Test load_llm_config() with various config file states."""
 
@@ -56,6 +64,30 @@ class TestLoadLlmConfig:
         with patch.object(config, "LLM_CONFIG_PATH", cfg_path):
             cfg = config.load_llm_config()
             assert cfg["provider"] == "ollama"
+
+    def test_ttl_cache(self, tmp_path):
+        """load_llm_config should return cached result within TTL."""
+        import time as _t
+        cfg_path = tmp_path / "llm-config.json"
+        cfg_path.write_text(json.dumps({"model": "cached-model"}))
+
+        with patch.object(config, "LLM_CONFIG_PATH", cfg_path):
+            cfg1 = config.load_llm_config()
+            assert cfg1["model"] == "cached-model"
+
+            # Delete file — cache should still return cached value
+            cfg_path.unlink()
+            cfg2 = config.load_llm_config()
+            assert cfg2["model"] == "cached-model"
+            assert cfg2 is cfg1  # same object from cache
+
+    def test_save_invalidates_cache(self, tmp_path):
+        """save_llm_config should update the cache."""
+        cfg_path = tmp_path / "llm-config.json"
+        with patch.object(config, "LLM_CONFIG_PATH", cfg_path):
+            config.save_llm_config({"model": "new-model"})
+            cfg = config.load_llm_config()
+            assert cfg["model"] == "new-model"
 
 
 class TestSaveLlmConfig:

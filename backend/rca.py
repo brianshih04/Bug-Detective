@@ -266,7 +266,7 @@ def _is_important(line: str) -> bool:
     return bool(_KEEP_KEYWORDS.search(line))
 
 
-def condense_log(log_text: str, bug_desc: str = "", api_key: str = "") -> str:
+def condense_log(log_text: str, bug_desc: str = "") -> str:
     """Step 0: Programmatic log condensation — two-layer approach.
 
     Layer 1 — Blacklist filter:
@@ -618,7 +618,7 @@ async def vector_search(query: str, top_k: int = 15) -> list[dict]:
     try:
         retriever = get_retriever(similarity_top_k=top_k)
         query_bundle = QueryBundle(query_str=query)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         nodes = await loop.run_in_executor(None, retriever.retrieve, query_bundle)
 
         results = []
@@ -793,63 +793,8 @@ async def hybrid_search(
 # =========================================================================
 # STEP 4: Deep Analysis (Cloud LLM — streaming)
 # =========================================================================
-async def deep_analysis(
-    search_results: list[dict], cleaned_log: dict, bug_desc: str,
-    api_key: str = "",
-) -> str:
-    """Use cloud LLM for deep analysis of search results (non-streaming)."""
-    llm_cfg = load_llm_config()
-
-    context_parts = []
-    for i, r in enumerate(search_results, 1):
-        context_parts.append(
-            f"### Result {i}: {r['file_path']} (score: {r.get('rrf_score', r.get('score', 'N/A'))})\n"
-            f"```{r.get('language', 'c')}\n{r['text']}\n```"
-        )
-    code_context = "\n\n".join(context_parts)
-
-    safe_context = sanitize_for_cloud(code_context)
-    safe_log = sanitize_for_cloud(cleaned_log.get("summary", ""))
-    safe_desc = sanitize_for_cloud(bug_desc)
-
-    prompt = f"""你是 Avision 軟體部門的資深 RCA (Root Cause Analysis) 工程師。
-
-## Bug 描述
-{safe_desc}
-
-## 問題摘要
-{safe_log}
-
-## 精確關鍵字
-{json.dumps(cleaned_log.get('exact', []), ensure_ascii=False)}
-
-## 相關程式碼片段（按相關度排序）
-{safe_context}
-
-## 任務
-請進行深度的 Root Cause Analysis，包含：
-1. **根本原因**：解釋為什麼會出現這個 Bug
-2. **受影響的檔案與行號**：列出需要修改的具體位置
-3. **修復建議**：提供具體的程式碼修改建議
-4. **驗證方法**：如何確認修復有效
-
-請用繁體中文回覆，程式碼片段用 markdown code block 標示。"""
-
-    messages = [{"role": "user", "content": prompt}]
-
-    try:
-        text, _usage = await call_llm_sync(
-            llm_cfg["base_url"],
-            api_key or llm_cfg.get("api_key", ""),
-            llm_cfg["model"],
-            messages, temperature=0.3, max_tokens=4096, timeout=180,
-        )
-        return text
-    except Exception as e:
-        return f"⚠️ 深度分析失敗: {e}"
-
-
 # =========================================================================
+
 # Full Pipeline (streaming)
 # =========================================================================
 def _step_event(step: int, state: str, elapsed: float = None, detail: str = "",
@@ -887,7 +832,7 @@ async def full_rca_stream(
         "text": f"📝 Step 0/5: Log 去重壓縮（{len(log_text):,} chars）...",
     }) + "\n"
 
-    condensed_log = condense_log(log_text, bug_desc, api_key)
+    condensed_log = condense_log(log_text, bug_desc)
     now = time.time()
     original_lines = len(log_text.split('\n'))
     condensed_lines = len(condensed_log.split('\n'))
