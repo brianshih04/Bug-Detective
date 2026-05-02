@@ -717,85 +717,119 @@ def _extract_keywords_from_drain(
     """Extract exact and semantic keywords from Drain + Regex results.
 
     Strategy:
-    - exact: function names, error codes, macros, identifiers from templates
-             that appear in anomaly/rare clusters + regex extraction
-    - semantic: domain terms from templates, module names, component names
+    - exact: regex-extracted error codes, function names, file paths, exceptions
+             + meaningful identifiers from Drain anomaly templates only
+             (skip hex addresses, pure numbers, generic words)
+    - semantic: domain terms from anomaly templates, module/component contexts,
+             exception concepts, bug description keywords
     - summary: auto-generated from anomaly clusters + bug_desc
     """
-    # Collect all template tokens for keyword mining
-    template_texts: list[str] = []
-    for c in drain_result.get("clusters", []):
-        template_texts.append(c["template"])
+    # Collect all template texts for keyword mining
+    template_texts: list[str] = [
+        c["template"] for c in drain_result.get("clusters", [])
+    ]
+
+    # Expanded stop words — generic tokens that add no search value
+    _STOP = frozenset({
+        # English
+        "the", "and", "for", "from", "with", "that", "this", "are", "was",
+        "not", "but", "has", "been", "have", "will", "its", "can", "may",
+        "all", "any", "each", "every", "after", "before", "during", "into",
+        "when", "where", "which", "their", "there", "then", "than", "more",
+        "also", "only", "just", "about", "would", "could", "should",
+        # Log levels / generic
+        "info", "debug", "trace", "verbose", "detail", "none", "null",
+        "true", "false", "error", "warning", "fatal", "critical", "status",
+        "started", "completed", "processing", "sent", "received", "check",
+        # Common verbs/articles that Drain produces
+        "failed", "detected", "timeout", "exceeded", "triggered", "started",
+        "completed", "check", "occurred", "attempt", "retry", "updated",
+    })
+
+    def _is_useful(token: str) -> bool:
+        """Filter out hex, pure numbers, short tokens, stop words."""
+        if len(token) < 3:
+            return False
+        if token.lower() in _STOP:
+            return False
+        # Skip hex addresses
+        if re.match(r"^0[xX][0-9A-Fa-f]+$", token):
+            return False
+        # Skip pure numeric tokens (including 0x-prefixed)
+        if re.match(r"^[0-9]+$", token):
+            return False
+        # Skip tokens that are mostly digits (e.g. "0x0001" without 0x prefix)
+        digit_count = sum(1 for c in token if c.isdigit())
+        if digit_count > len(token) * 0.6:
+            return False
+        return True
 
     # === Exact keywords ===
-    exact_set: set[str] = set()
+    exact_list: list[str] = []
 
-    # 1. From regex extraction (reliable structured patterns)
-    for category in ("error_codes", "function_names"):
+    # 1. Regex results are highest priority (they're pattern-matched)
+    for category in ("error_codes", "function_names", "file_paths", "exceptions"):
         for val in regex_result.get(category, []):
-            exact_set.add(val.strip())
+            v = val.strip()
+            if v and v not in exact_list:
+                exact_list.append(v)
 
-    # 2. From Drain templates: extract identifiers, module names, error tokens
+    # 2. From Drain templates: only extract from anomaly/rare templates
+    #    and only meaningful identifiers (not hex, not generic)
     identifier_re = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]{2,40}\b")
-    hex_re = re.compile(r"\b0x[0-9A-Fa-f]{4,16}\b")
-
-    # Weight anomaly templates higher (their keywords are more likely bug-relevant)
     anomaly_templates = set()
     for a in drain_result.get("anomalies", []):
         anomaly_templates.add(a["template"])
-
-    for tmpl in template_texts:
-        weight = 2 if tmpl in anomaly_templates else 1
-        for m in identifier_re.finditer(tmpl):
-            token = m.group()
-            # Skip common stop words and log levels
-            if token.lower() in (
-                "the", "and", "for", "from", "with", "that", "this", "are", "was",
-                "not", "but", "has", "been", "have", "will", "its", "can", "may",
-                "info", "debug", "trace", "verbose", "detail", "none", "null",
-                "true", "false", "error", "warning", "fatal", "critical",
-            ):
-                continue
-            # From anomaly templates, add more aggressively
-            if weight >= 2 or len(token) >= 3:
-                exact_set.add(token)
-
-    # 3. From anomaly sample lines — extract identifiers not in common templates
-    for a in drain_result.get("anomalies", []):
+        # Also extract from anomaly sample lines
         for line in a.get("sample_lines", []):
             for m in identifier_re.finditer(line):
                 token = m.group()
-                if token.lower() not in (
-                    "the", "and", "for", "from", "with", "that", "this",
-                    "error", "warning", "fatal", "critical",
-                ) and len(token) >= 3:
-                    exact_set.add(token)
+                if _is_useful(token) and token not in exact_list:
+                    exact_list.append(token)
+
+    # From anomaly templates themselves
+    for tmpl in anomaly_templates:
+        for m in identifier_re.finditer(tmpl):
+            token = m.group()
+            if _is_useful(token) and token not in exact_list:
+                exact_list.append(token)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    exact_deduped: list[str] = []
+    for v in exact_list:
+        if v.lower() not in seen:
+            seen.add(v.lower())
+            exact_deduped.append(v)
 
     # === Semantic keywords ===
     semantic_set: set[str] = set()
 
-    # 1. Module/component names from templates (words before common separators)
-    module_re = re.compile(
-        r"\b(?:module|component|device|sensor|task|thread|subsystem|unit|engine|"
-        r"handler|manager|controller|service|driver|interface|port)\b",
-        re.IGNORECASE,
-    )
-    for tmpl in template_texts:
-        for m in module_re.finditer(tmpl):
-            # Take surrounding context for richer semantic keyword
-            start = max(0, m.start() - 20)
-            end = min(len(tmpl), m.end() + 40)
-            context = tmpl[start:end]
-            semantic_set.add(context.strip())
+    # 1. From anomaly templates — take meaningful phrases (remove <*> wildcards)
+    for tmpl in anomaly_templates:
+        # Clean template: remove <*> and extra whitespace
+        clean = re.sub(r"<\*>", "", tmpl).strip()
+        # Take the cleaned template as a semantic phrase
+        if clean and len(clean) > 5:
+            semantic_set.add(clean[:60])
 
-    # 2. From regex exceptions (semantic concepts like "null pointer", "buffer overflow")
+    # 2. Regex exceptions (concepts like "null pointer", "buffer overflow")
     for val in regex_result.get("exceptions", []):
         semantic_set.add(val.strip())
 
-    # 3. Bug description words (for semantic matching)
-    bug_words = set(bug_desc.lower().split())
-    for w in bug_words:
-        if len(w) >= 2 and w not in ("the", "and", "for", "is", "of", "to", "in"):
+    # 3. Module/component phrases from ALL templates (not just anomalies)
+    #    Pattern: look for compound identifiers like "ImageProc", "PrintEngine"
+    compound_re = re.compile(r"\b[a-zA-Z][a-zA-Z0-9]*(?:[_/\\][a-zA-Z][a-zA-Z0-9]*){0,2}\b")
+    for tmpl in template_texts:
+        for m in compound_re.finditer(tmpl):
+            token = m.group()
+            if _is_useful(token) and len(token) >= 4:
+                semantic_set.add(token)
+
+    # 4. Bug description meaningful words
+    for w in bug_desc.split():
+        w = w.strip()
+        if len(w) >= 2 and w.lower() not in ("the", "and", "for", "is", "of", "to", "in", "a"):
             semantic_set.add(w)
 
     # === Summary ===
@@ -814,7 +848,7 @@ def _extract_keywords_from_drain(
             summary_parts.append(f"異常: {'; '.join(anomaly_descs)}")
 
     return {
-        "exact": sorted(exact_set)[:20],
+        "exact": exact_deduped[:20],
         "semantic": sorted(semantic_set)[:20],
         "summary": " | ".join(summary_parts)[:100],
     }
