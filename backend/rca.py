@@ -76,37 +76,44 @@ async def call_llm_stream(
         "temperature": temperature, "max_tokens": max_tokens, "stream": True,
     }
 
-    client = _get_shared_http_client(timeout)
-    async with client.stream(
-        "POST", _chat_url(base_url), json=payload, headers=headers,
-    ) as resp:
-        resp.raise_for_status()
-        token_count = 0
-        async for line in resp.aiter_lines():
-            if not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data.strip() == "[DONE]":
-                # Emit final token count
-                if token_count > 0:
-                    yield json.dumps({"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}) + "\n"
-                break
-            try:
-                chunk = json.loads(data)
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content", "")
-                reasoning = (
-                    delta.get("reasoning", "")
-                    or delta.get("reasoning_content", "")
-                )
-                if reasoning:
-                    yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
-                    token_count += 1
-                if content:
-                    yield json.dumps({"type": "content", "text": content}) + "\n"
-                    token_count += 1
-            except json.JSONDecodeError:
-                continue
+    try:
+        client = _get_shared_http_client(timeout)
+        async with client.stream(
+            "POST", _chat_url(base_url), json=payload, headers=headers,
+        ) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                yield json.dumps({"type": "error", "text": f"LLM API 回應 HTTP {resp.status_code}: {body.decode(errors='replace')[:500]}"}) + "\n"
+                return
+            token_count = 0
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    if token_count > 0:
+                        yield json.dumps({"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}) + "\n"
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    reasoning = (
+                        delta.get("reasoning", "")
+                        or delta.get("reasoning_content", "")
+                    )
+                    if reasoning:
+                        yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
+                        token_count += 1
+                    if content:
+                        yield json.dumps({"type": "content", "text": content}) + "\n"
+                        token_count += 1
+                except json.JSONDecodeError:
+                    continue
+    except httpx.TimeoutException:
+        yield json.dumps({"type": "error", "text": f"LLM API 連線逾時（{timeout}s）"}) + "\n"
+    except Exception as e:
+        yield json.dumps({"type": "error", "text": f"LLM API 呼叫失敗：{type(e).__name__}: {str(e)[:300]}"}) + "\n"
 
 
 async def call_llm_sync(

@@ -602,6 +602,12 @@
         stepsContainer.appendChild(badge4);
         $('btnExportMd').style.display = '';
         break;
+      case 'error':
+        showToast('⚠️ ' + evt.text, 'error', 8000);
+        // Show error in analysis area but keep existing content
+        analysisContent.classList.remove('streaming-cursor');
+        thinkingSpinner.style.display = 'none';
+        break;
     }
   }
 
