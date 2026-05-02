@@ -516,12 +516,13 @@ async def llm_expand_keywords(
             + structured.get("exceptions", [])[:5]
         )
         semantic = structured.get("file_paths", [])[:5]
+        error_msg = f"Step 2 LLM 擴充失敗: {e}"
         return {
             "summary": bug_desc[:100],
             "exact": exact,
             "semantic": semantic,
             "structured": structured,
-            "error": str(e),
+            "error": error_msg,
         }
 
 
@@ -947,13 +948,19 @@ async def full_rca_stream(
 
     messages = [{"role": "user", "content": prompt}]
 
-    async for chunk in call_llm_stream(
-        llm_cfg["base_url"],
-        api_key or llm_cfg.get("api_key", ""),
-        llm_cfg["model"],
-        messages, temperature=0.3, max_tokens=4096, timeout=180,
-    ):
-        yield chunk
+    try:
+        async for chunk in call_llm_stream(
+            llm_cfg["base_url"],
+            api_key or llm_cfg.get("api_key", ""),
+            llm_cfg["model"],
+            messages, temperature=0.3, max_tokens=4096, timeout=180,
+        ):
+            yield chunk
+    except Exception as e:
+        yield json.dumps({
+            "type": "status",
+            "text": f"⚠️ Step 4 分析中斷: {e}",
+        }) + "\n"
 
     total_elapsed = time.time() - t0
     yield _step_event(4, "done", elapsed=time.time() - step_start,
