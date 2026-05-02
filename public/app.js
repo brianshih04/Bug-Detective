@@ -519,19 +519,10 @@
           analysisContent.innerHTML = '';
         }
         analysisRawText += (evt.text || '');
-        // During streaming: just append text (fast, no markdown parsing)
-        if (analysisContent._streamMode !== true) {
-          analysisContent._streamMode = true;
-          analysisContent.innerHTML = '';
-          var pre = document.createElement('pre');
-          pre.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;font-family:inherit;line-height:1.7;margin:0;padding:1rem;';
-          pre.className = 'stream-raw-text';
-          analysisContent.appendChild(pre);
-        }
-        var pre = analysisContent.querySelector('.stream-raw-text');
-        if (pre) pre.textContent = analysisRawText;
-        analysisContent.classList.add('streaming-cursor');
-        // Auto-scroll
+        analysisContent.innerHTML = renderMarkdown(analysisRawText);
+        analysisContent.classList.remove('streaming-cursor');
+        if (isAnalyzing) analysisContent.classList.add('streaming-cursor');
+        // Auto-scroll analysis
         var panel = analysisContent.closest('.result-panel');
         if (panel) panel.scrollTop = panel.scrollHeight;
         break;
@@ -539,10 +530,6 @@
         setPipelineStep(4, 'done');
         stopPipelineTimer();
         analyzeStatusText.textContent = '分析完成 ✓';
-        // Final full re-render
-        if (analysisRawText) {
-          analysisContent.innerHTML = renderMarkdown(analysisRawText);
-        }
         analysisContent.classList.remove('streaming-cursor');
         thinkingSpinner.style.display = 'none';
         showToast('分析完成', 'success');
@@ -996,35 +983,15 @@
     if (!text) return '';
     var html = text;
 
-    // 1. Extract code blocks to prevent escapeHtml from mangling them
-    var codeBlocks = [];
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
-      var idx = codeBlocks.length;
-      codeBlocks.push('<pre><code>' + escapeHtml(code.trim()) + '</code></pre>');
-      return '%%CB' + idx + '%%';
+      return '<pre><code>' + escapeHtml(code.trim()) + '</code></pre>';
     });
     html = html.replace(/```(\w*)\n([\s\S]*)$/g, function(_, lang, code) {
-      var idx = codeBlocks.length;
-      codeBlocks.push('<pre><code>' + escapeHtml(code.trimEnd()) + '</code></pre>');
-      return '%%CB' + idx + '%%';
+      return '<pre><code>' + escapeHtml(code.trimEnd()) + '</code></pre>';
     });
 
-    // 2. Extract inline code
-    html = html.replace(/`([^`]+)`/g, function(_, code) {
-      var idx = codeBlocks.length;
-      codeBlocks.push('<code>' + escapeHtml(code) + '</code>');
-      return '%%CB' + idx + '%%';
-    });
+    html = html.replace(/`([^`]+)`/g, function(_, code) { return '<code>' + escapeHtml(code) + '</code>'; });
 
-    // 3. Escape all remaining raw text (XSS prevention — done ONCE)
-    html = escapeHtml(html);
-
-    // 4. Restore code blocks (already safe HTML)
-    for (var i = 0; i < codeBlocks.length; i++) {
-      html = html.split('%%CB' + i + '%%').join(codeBlocks[i]);
-    }
-
-    // 5. Apply markdown formatting (text is already escaped, no need for escapeHtml in callbacks)
     html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
     html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
     html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
@@ -1037,13 +1004,13 @@
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
-    // Links: text and url are already escaped; just block javascript: scheme
+    // XSS: block javascript: scheme in links
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
-      if (/^javascript\s*:/i.test(url)) return text;
+      if (/^javascript\s*:/i.test(url)) return escapeHtml(text);
       return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
     });
 
-    html = html.replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+    html = html.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');
 
     html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
