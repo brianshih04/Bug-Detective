@@ -78,7 +78,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:17580",
         "http://127.0.0.1:17580",
+        "http://localhost:17581",
+        "http://127.0.0.1:17581",
         "https://bug.avision-gb10.org",
+        "https://bugdev.avision-gb10.org",
     ],
     allow_credentials=True,
     allow_methods=["*"],
