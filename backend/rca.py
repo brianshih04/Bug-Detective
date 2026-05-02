@@ -1,8 +1,8 @@
 """Root Cause Analysis: 5-step pipeline.
 
 Step 0: Rule-based log dedup / condensation
-Step 1: Chunked LLM log parsing (local Ollama — per-chunk event/keyword extraction)
-Step 2: Synthesis of chunk results into final keywords
+Step 1: Drain3 log parsing + Regex extraction (fast, deterministic)
+Step 2: Keyword extraction from Drain clusters (rule-based)
 Step 3: Hybrid search (keyword grep + Qdrant vector → RRF fusion)
 Step 4: Cloud LLM deep analysis (GLM-5 / OpenRouter / MiniMax)
 """
@@ -18,6 +18,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import httpx
+from drain3.drain import Drain
 from llama_index.core import QueryBundle, VectorStoreIndex
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -45,8 +46,11 @@ VECTOR_SEARCH_TIMEOUT = 30  # seconds
 RRF_K = 60  # Reciprocal Rank Fusion constant
 DEFAULT_BATCH_SIZE = 20  # Step 4 batch size
 PER_BATCH_TIMEOUT_CAP = 300  # 5 min cap per-batch in Step 4
-LOG_CHUNK_SIZE = 64000  # chars per log chunk for chunked LLM parsing
-LOG_CHUNK_OVERLAP_LINES = 5  # overlap lines between chunks for context continuity
+
+# Drain3 configuration
+DRAIN_DEPTH = 4  # tree depth for prefix matching
+DRAIN_SIM_THRESHOLD = 0.4  # similarity threshold for cluster matching
+DRAIN_EXTRA_DELIMITERS = ('=', ':', '/', '\\', ',', ';')  # extra token delimiters
 
 
 # ---------------------------------------------------------------------------
@@ -521,14 +525,19 @@ _SYNTHESIZE_CHUNKS_PROMPT = """你是一個 C/C++ 嵌入式系統（MFP 印表�
 ## 各段 Log 分析結果（共 {total_chunks} 段）
 {chunk_summaries}
 
+## ⚠️ 異常片段分析（與其他段不同的片段，可能是 Bug 關鍵線索）
+{anomaly_section}
+
 ## 任務
-請根據以上所有片段的分析結果，產生用來搜尋原始碼的關鍵字，分為兩類：
+請根據以上所有片段的分析結果，特別注意「異常片段」中的獨有資訊，產生用來搜尋原始碼的關鍵字，分為兩類：
 
 1. **exact**：精確匹配的關鍵字（error code、function name、變數名稱、macro 名稱），
    這些關鍵字必須能在程式碼中直接找到。最多 20 個。
+   優先包含異常片段中的獨有關鍵字。
 2. **semantic**：語意相關的關鍵字（相關模組名稱、同義詞、功能描述詞），
    用來做語意搜尋，找到字面上不同但概念相關的程式碼。最多 20 個。
 3. **summary**：用一句話（50 字以內）描述這個 Bug 的核心問題。
+   如果有異常片段，摘要中必須提及異常片段的差異行為。
 
 請「只」回覆 JSON，不要加任何其他文字或 markdown code block：
 {{"exact": ["keyword1", "keyword2"], "semantic": ["related1", "related2"], "summary": "核心問題描述"}}"""
@@ -613,7 +622,206 @@ def extract_structured_log(log_text: str) -> dict:
 
 
 # =========================================================================
-# STEP 2: LLM Semantic Expansion (Qwen local)
+# DRAIN3: Log Template Mining (replaces LLM-based Step 1+2)
+# =========================================================================
+def _parse_log_with_drain(log_text: str) -> dict:
+    """Parse log text using Drain3 algorithm.
+
+    Returns dict with:
+      - clusters: list of {template, size, sample_lines, cluster_id}
+      - total_lines: number of log lines processed
+      - total_clusters: number of distinct templates
+      - anomalies: list of anomaly descriptors (rare/error clusters)
+    """
+    drain = Drain(
+        depth=DRAIN_DEPTH,
+        sim_th=DRAIN_SIM_THRESHOLD,
+        max_children=100,
+        max_clusters=500,
+        extra_delimiters=DRAIN_EXTRA_DELIMITERS,
+        parametrize_numeric_tokens=True,
+    )
+
+    lines = log_text.split("\n")
+    total_lines = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        drain.add_log_message(line)
+        total_lines += 1
+
+    # Collect cluster results sorted by size desc
+    clusters = []
+    for cluster_id, cluster in drain.id_to_cluster.items():
+        template = " ".join(cluster.log_template_tokens)
+        samples = cluster.log_sample_strings[:5] if hasattr(cluster, "log_sample_strings") else []
+        clusters.append({
+            "cluster_id": cluster_id,
+            "template": template,
+            "size": cluster.size,
+            "sample_lines": samples,
+        })
+
+    clusters.sort(key=lambda c: c["size"], reverse=True)
+
+    # Detect anomalies: rare clusters with error/fatal/warning keywords
+    anomalies = []
+    error_severity = re.compile(
+        r"\b(error|err|fail|fatal|crash|exception|segfault|abort|panic|critical)\b",
+        re.IGNORECASE,
+    )
+    warn_severity = re.compile(r"\b(warning|warn)\b", re.IGNORECASE)
+
+    for c in clusters:
+        # Rare clusters (size 1-2) with error keywords are anomalies
+        template = c["template"]
+        has_error = bool(error_severity.search(template))
+        has_warn = bool(warn_severity.search(template))
+        severity = "critical" if has_error else ("warning" if has_warn else "info")
+
+        if c["size"] <= 2 and has_error:
+            anomalies.append({
+                "cluster_id": c["cluster_id"],
+                "template": template,
+                "size": c["size"],
+                "severity": severity,
+                "sample_lines": c["sample_lines"],
+                "reason": f"罕見錯誤模板 (size={c['size']})",
+            })
+        elif c["size"] <= 1 and has_warn:
+            anomalies.append({
+                "cluster_id": c["cluster_id"],
+                "template": template,
+                "size": c["size"],
+                "severity": severity,
+                "sample_lines": c["sample_lines"],
+                "reason": f"唯一警告模板 (size={c['size']})",
+            })
+
+    anomalies.sort(key=lambda a: (0 if a["severity"] == "critical" else 1, a["size"]))
+
+    return {
+        "clusters": clusters,
+        "total_lines": total_lines,
+        "total_clusters": len(clusters),
+        "anomalies": anomalies,
+    }
+
+
+def _extract_keywords_from_drain(
+    drain_result: dict,
+    regex_result: dict,
+    bug_desc: str,
+) -> dict:
+    """Extract exact and semantic keywords from Drain + Regex results.
+
+    Strategy:
+    - exact: function names, error codes, macros, identifiers from templates
+             that appear in anomaly/rare clusters + regex extraction
+    - semantic: domain terms from templates, module names, component names
+    - summary: auto-generated from anomaly clusters + bug_desc
+    """
+    # Collect all template tokens for keyword mining
+    template_texts: list[str] = []
+    for c in drain_result.get("clusters", []):
+        template_texts.append(c["template"])
+
+    # === Exact keywords ===
+    exact_set: set[str] = set()
+
+    # 1. From regex extraction (reliable structured patterns)
+    for category in ("error_codes", "function_names"):
+        for val in regex_result.get(category, []):
+            exact_set.add(val.strip())
+
+    # 2. From Drain templates: extract identifiers, module names, error tokens
+    identifier_re = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]{2,40}\b")
+    hex_re = re.compile(r"\b0x[0-9A-Fa-f]{4,16}\b")
+
+    # Weight anomaly templates higher (their keywords are more likely bug-relevant)
+    anomaly_templates = set()
+    for a in drain_result.get("anomalies", []):
+        anomaly_templates.add(a["template"])
+
+    for tmpl in template_texts:
+        weight = 2 if tmpl in anomaly_templates else 1
+        for m in identifier_re.finditer(tmpl):
+            token = m.group()
+            # Skip common stop words and log levels
+            if token.lower() in (
+                "the", "and", "for", "from", "with", "that", "this", "are", "was",
+                "not", "but", "has", "been", "have", "will", "its", "can", "may",
+                "info", "debug", "trace", "verbose", "detail", "none", "null",
+                "true", "false", "error", "warning", "fatal", "critical",
+            ):
+                continue
+            # From anomaly templates, add more aggressively
+            if weight >= 2 or len(token) >= 3:
+                exact_set.add(token)
+
+    # 3. From anomaly sample lines — extract identifiers not in common templates
+    for a in drain_result.get("anomalies", []):
+        for line in a.get("sample_lines", []):
+            for m in identifier_re.finditer(line):
+                token = m.group()
+                if token.lower() not in (
+                    "the", "and", "for", "from", "with", "that", "this",
+                    "error", "warning", "fatal", "critical",
+                ) and len(token) >= 3:
+                    exact_set.add(token)
+
+    # === Semantic keywords ===
+    semantic_set: set[str] = set()
+
+    # 1. Module/component names from templates (words before common separators)
+    module_re = re.compile(
+        r"\b(?:module|component|device|sensor|task|thread|subsystem|unit|engine|"
+        r"handler|manager|controller|service|driver|interface|port)\b",
+        re.IGNORECASE,
+    )
+    for tmpl in template_texts:
+        for m in module_re.finditer(tmpl):
+            # Take surrounding context for richer semantic keyword
+            start = max(0, m.start() - 20)
+            end = min(len(tmpl), m.end() + 40)
+            context = tmpl[start:end]
+            semantic_set.add(context.strip())
+
+    # 2. From regex exceptions (semantic concepts like "null pointer", "buffer overflow")
+    for val in regex_result.get("exceptions", []):
+        semantic_set.add(val.strip())
+
+    # 3. Bug description words (for semantic matching)
+    bug_words = set(bug_desc.lower().split())
+    for w in bug_words:
+        if len(w) >= 2 and w not in ("the", "and", "for", "is", "of", "to", "in"):
+            semantic_set.add(w)
+
+    # === Summary ===
+    anomaly_count = len(drain_result.get("anomalies", []))
+    total_clusters = drain_result.get("total_clusters", 0)
+    summary_parts = [bug_desc[:80]]
+    if anomaly_count > 0:
+        # Include anomaly template keywords in summary
+        anomaly_descs = []
+        for a in drain_result.get("anomalies", [])[:3]:
+            # Extract meaningful part of template (skip <*> wildcards)
+            clean = a["template"].replace("<*>", "").strip()
+            if clean:
+                anomaly_descs.append(clean[:50])
+        if anomaly_descs:
+            summary_parts.append(f"異常: {'; '.join(anomaly_descs)}")
+
+    return {
+        "exact": sorted(exact_set)[:20],
+        "semantic": sorted(semantic_set)[:20],
+        "summary": " | ".join(summary_parts)[:100],
+    }
+
+
+# =========================================================================
+# STEP 2: LLM Semantic Expansion (Qwen local) — LEGACY, kept as fallback
 # =========================================================================
 async def llm_expand_keywords(
     structured: dict,
@@ -740,11 +948,12 @@ async def llm_expand_keywords(
 # =========================================================================
 # Chunked LLM Log Parsing (replaces regex Step 1 + LLM Step 2 in pipeline)
 # =========================================================================
-def _chunk_log(log_text: str, chunk_size: int = LOG_CHUNK_SIZE, overlap: int = LOG_CHUNK_OVERLAP_LINES) -> list[str]:
+def _chunk_log(log_text: str, chunk_size: int = 64000, overlap: int = 5) -> list[str]:
     """Split log text into chunks of ~chunk_size characters at line boundaries.
 
     Each chunk (except the first) prepends the last `overlap` lines of the
     previous chunk for context continuity.
+    NOTE: This is legacy code kept as utility. The main pipeline now uses Drain3.
     """
     if not log_text:
         return []
@@ -834,6 +1043,113 @@ def _fallback_keywords_from_chunks(
         "semantic": all_patterns[:20],
         "summary": bug_desc[:100],
     }
+
+
+def _find_anomaly_chunks(chunk_results: list[dict]) -> list[dict]:
+    """Compare chunk results and find chunks that are 'different' from others.
+
+    An anomaly is a chunk that has:
+    - Keywords unique to it (not shared with other chunks)
+    - High-severity events (critical/high) not seen elsewhere
+    - Patterns unique to it
+
+    Returns list of anomaly descriptors for each chunk that has anomalies,
+    with overall 'anomaly_score' and details.
+    """
+    if len(chunk_results) < 2:
+        return []
+
+    # Collect shared keyword/pattern/event sets across ALL chunks
+    kw_per_chunk: list[set[str]] = []
+    pat_per_chunk: list[set[str]] = []
+    event_desc_per_chunk: list[set[str]] = []
+    severity_per_chunk: list[dict[str, int]] = []  # severity → count
+
+    for cr in chunk_results:
+        if not cr:
+            kw_per_chunk.append(set())
+            pat_per_chunk.append(set())
+            event_desc_per_chunk.append(set())
+            severity_per_chunk.append({})
+            continue
+        kw_set = set(kw.lower() for kw in cr.get("keywords", []))
+        pat_set = set(p.lower() for p in cr.get("patterns", []))
+        evt_set = set()
+        sev_counts: dict[str, int] = {}
+        for e in cr.get("events", []):
+            desc = e.get("desc", "").lower()[:80]
+            if desc:
+                evt_set.add(desc)
+            s = e.get("severity", "low").lower()
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+        kw_per_chunk.append(kw_set)
+        pat_per_chunk.append(pat_set)
+        event_desc_per_chunk.append(evt_set)
+        severity_per_chunk.append(sev_counts)
+
+    # Compute union of keywords across all chunks (for "shared" detection)
+    all_kw_union: set[str] = set()
+    for s in kw_per_chunk:
+        all_kw_union |= s
+    # A keyword is "common" if it appears in > 50% of chunks
+    n_chunks = len(chunk_results)
+    common_kw: set[str] = set()
+    for kw in all_kw_union:
+        count = sum(1 for s in kw_per_chunk if kw in s)
+        if count > n_chunks * 0.5:
+            common_kw.add(kw)
+
+    all_pat_union: set[str] = set()
+    for s in pat_per_chunk:
+        all_pat_union |= s
+    common_pat: set[str] = set()
+    for p in all_pat_union:
+        count = sum(1 for s in pat_per_chunk if p in s)
+        if count > n_chunks * 0.5:
+            common_pat.add(p)
+
+    # Find anomalies per chunk
+    anomalies: list[dict] = []
+    for i, cr in enumerate(chunk_results):
+        if not cr:
+            continue
+        unique_kws = sorted(kw_per_chunk[i] - common_kw)
+        unique_pats = sorted(pat_per_chunk[i] - common_pat)
+
+        # Events with high severity unique to this chunk
+        high_sev = severity_per_chunk[i].get("critical", 0) + severity_per_chunk[i].get("high", 0)
+        unique_high_evts = []
+        for e in cr.get("events", []):
+            sev = e.get("severity", "low").lower()
+            if sev in ("critical", "high"):
+                desc_norm = e.get("desc", "").lower()[:80]
+                # Check if this high-severity event is unique (not in other chunks)
+                other_has = any(
+                    desc_norm in event_desc_per_chunk[j]
+                    for j in range(n_chunks) if j != i
+                )
+                if not other_has:
+                    unique_high_evts.append(e)
+
+        # Score: weighted sum of uniqueness signals
+        score = len(unique_kws) * 2 + len(unique_pats) * 3 + len(unique_high_evts) * 5 + high_sev * 2
+
+        if score > 0:
+            anomalies.append({
+                "chunk_idx": i + 1,  # 1-based
+                "score": score,
+                "unique_keywords": unique_kws[:15],
+                "unique_patterns": unique_pats[:10],
+                "unique_critical_events": [
+                    {"desc": e.get("desc", ""), "severity": e.get("severity", "")}
+                    for e in unique_high_evts[:5]
+                ],
+                "high_severity_count": high_sev,
+            })
+
+    # Sort by anomaly score descending
+    anomalies.sort(key=lambda x: x["score"], reverse=True)
+    return anomalies
 
 
 async def _parse_single_chunk(chunk_idx: int, total_chunks: int, chunk_text: str, bug_desc: str) -> dict:
@@ -1481,159 +1797,91 @@ async def full_rca_stream(
     log_text = condensed_log
     step_start = time.time()
 
-    # ── Step 1: Chunked LLM log parsing ──────────────────────────
+    # ── Step 1: Drain3 log parsing + Regex extraction ─────────────
     yield _step_event(1, "active", elapsed=time.time() - t0)
-
-    # Split log into chunks
-    chunks = _chunk_log(log_text)
-    n_chunks = len(chunks)
     yield (
         json.dumps(
             {
                 "type": "status",
-                "text": f"🧠 Step 2/5: LLM 智慧 Log 解析（分 {n_chunks} 段）...",
+                "text": f"🧠 Step 2/5: Drain3 Log 解析 + Regex 萃取（{len(log_text):,} chars）...",
             }
         )
         + "\n"
     )
 
-    # Parse each chunk with LLM (streaming: forward thinking to prevent Cloudflare timeout)
-    chunk_results: list[dict] = []
-    for ci, chunk_text in enumerate(chunks):
-        yield (
-            json.dumps(
-                {
-                    "type": "status",
-                    "text": f"  📄 分析 Chunk {ci + 1}/{n_chunks}（{len(chunk_text):,} chars）...",
-                }
-            )
-            + "\n"
-        )
-        prompt = _PARSE_LOG_CHUNK_PROMPT.format(
-            chunk_idx=ci + 1, total_chunks=n_chunks, bug_desc=bug_desc, chunk_text=chunk_text,
-        )
-        collected = ""
-        async for evt in _stream_and_collect(
-            OLLAMA_URL + "/v1", "", OLLAMA_MODEL,
-            [{"role": "user", "content": prompt}],
-            temperature=0.1, max_tokens=4096, timeout=300,
-        ):
-            if '"_collected"' in evt:
-                collected = json.loads(evt)["text"]
-            else:
-                yield evt  # forward thinking/token_usage to frontend
-        cr = _parse_llm_json_response(collected) if collected.strip() else {}
-        chunk_results.append(cr)
-        n_events = len(cr.get("events", []))
-        n_kws = len(cr.get("keywords", []))
-        n_pats = len(cr.get("patterns", []))
-        yield (
-            json.dumps(
-                {
-                    "type": "status",
-                    "text": f"  ✅ Chunk {ci + 1}/{n_chunks}: {n_events} 事件, {n_kws} 關鍵字, {n_pats} 模式",
-                }
-            )
-            + "\n"
-        )
+    # Run Drain3 and Regex in parallel-ish (both are sync, fast)
+    drain_result = _parse_log_with_drain(log_text)
+    regex_result = extract_structured_log(log_text)
 
     now = time.time()
-    total_events = sum(len(cr.get("events", [])) for cr in chunk_results)
-    total_kws = sum(len(cr.get("keywords", [])) for cr in chunk_results)
-    yield _step_event(1, "done", elapsed=now - step_start, detail=f"{n_chunks} chunks, {total_events} events")
+    drain_clusters = drain_result.get("clusters", [])
+    drain_anomalies = drain_result.get("anomalies", [])
+    yield _step_event(
+        1,
+        "done",
+        elapsed=now - step_start,
+        detail=f"{drain_result['total_clusters']} templates, {len(drain_anomalies)} anomalies",
+    )
     yield (
         json.dumps(
             {
                 "type": "step1_result",
                 "data": {
-                    "chunks_total": n_chunks,
-                    "chunks_parsed": sum(1 for cr in chunk_results if cr),
-                    "total_events": total_events,
-                    "total_keywords": total_kws,
-                    "chunk_results": chunk_results,
+                    "drain": {
+                        "total_lines": drain_result["total_lines"],
+                        "total_clusters": drain_result["total_clusters"],
+                        "clusters": [
+                            {
+                                "template": c["template"],
+                                "size": c["size"],
+                                "sample_lines": c["sample_lines"][:3],
+                            }
+                            for c in drain_clusters[:30]  # top 30 clusters
+                        ],
+                        "anomalies": drain_anomalies,
+                    },
+                    "regex": {
+                        "error_codes": regex_result.get("error_codes", [])[:20],
+                        "function_names": regex_result.get("function_names", [])[:20],
+                        "file_paths": regex_result.get("file_paths", [])[:20],
+                        "exceptions": regex_result.get("exceptions", [])[:20],
+                        "memory_addresses": regex_result.get("memory_addresses", [])[:10],
+                        "error_lines_count": len(regex_result.get("error_lines", [])),
+                    },
                 },
+            }
+        )
+        + "\n"
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": (
+                    f"  ✅ Drain: {drain_result['total_clusters']} 模板, "
+                    f"{len(drain_anomalies)} 異常 | "
+                    f"Regex: {len(regex_result.get('error_codes', []))} 錯誤碼, "
+                    f"{len(regex_result.get('function_names', []))} 函式"
+                ),
             }
         )
         + "\n"
     )
     step_start = time.time()
 
-    # ── Step 2: Synthesize chunk results (streaming: forward thinking) ──
+    # ── Step 2: Keyword extraction (rule-based, no LLM) ──────────
     yield _step_event(2, "active", elapsed=time.time() - t0)
     yield (
         json.dumps(
             {
                 "type": "status",
-                "text": "🔀 Step 3/5: 統合分析結果...",
+                "text": "🔀 Step 3/5: 提取搜尋關鍵字...",
             }
         )
         + "\n"
     )
 
-    # Build chunk summaries for synthesis prompt (same logic as _synthesize_chunk_results)
-    summaries = []
-    all_keywords: list[str] = []
-    all_patterns: list[str] = []
-    for i, cr in enumerate(chunk_results):
-        if not cr:
-            continue
-        events = cr.get("events", [])
-        kws = cr.get("keywords", [])
-        pats = cr.get("patterns", [])
-        event_descs = [f"  - [{e.get('severity', '?')}] {e.get('desc', '')}" for e in events[:5]]
-        summary_lines = [f"片段 {i + 1}:"]
-        if event_descs:
-            summary_lines.append("事件:\n" + "\n".join(event_descs))
-        if kws:
-            summary_lines.append(f"關鍵字: {', '.join(kws[:15])}")
-        if pats:
-            summary_lines.append(f"模式: {', '.join(pats[:10])}")
-        summaries.append("\n".join(summary_lines))
-        all_keywords.extend(kws)
-        all_patterns.extend(pats)
-
-    if summaries:
-        chunk_summaries_text = "\n\n".join(summaries)
-        syn_prompt = _SYNTHESIZE_CHUNKS_PROMPT.format(
-            bug_desc=bug_desc,
-            chunk_summaries=chunk_summaries_text,
-            total_chunks=len(chunk_results),
-        )
-        syn_messages = [{"role": "user", "content": syn_prompt}]
-        syn_collected = ""
-        syn_usage = {}
-        async for evt in _stream_and_collect(
-            OLLAMA_URL + "/v1", "", OLLAMA_MODEL, syn_messages,
-            temperature=0.1, max_tokens=4096, timeout=300,
-        ):
-            if '"_collected"' in evt:
-                syn_collected = json.loads(evt)["text"]
-            elif '"token_usage"' in evt:
-                syn_usage = json.loads(evt)
-                yield evt
-            else:
-                yield evt  # forward thinking to frontend
-
-        if syn_collected.strip():
-            parsed = _parse_llm_json_response(syn_collected)
-            if parsed:
-                expanded = {
-                    "exact": parsed.get("exact", [])[:20],
-                    "semantic": parsed.get("semantic", [])[:20],
-                    "summary": parsed.get("summary", bug_desc[:100]),
-                    "usage": syn_usage or {},
-                }
-            else:
-                expanded = _fallback_keywords_from_chunks(all_keywords, all_patterns, bug_desc)
-        else:
-            expanded = _fallback_keywords_from_chunks(all_keywords, all_patterns, bug_desc)
-    else:
-        expanded = {"exact": [], "semantic": [], "summary": bug_desc[:100]}
-
-    # Emit token usage for Step 2
-    step2_usage = expanded.get("usage", {})
-    if step2_usage:
-        yield json.dumps({"type": "token_usage", "step": 2, **step2_usage, "max_tokens": _max_tokens}) + "\n"
+    expanded = _extract_keywords_from_drain(drain_result, regex_result, bug_desc)
 
     now = time.time()
     yield _step_event(

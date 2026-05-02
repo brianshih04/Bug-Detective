@@ -149,7 +149,40 @@
   --collapsible-toggle-color: var(--accent);
   --collapsible-body-bg: #110c0a;
 }
- html { font-size: 15px; }
+
+/* ===== THEME: gray ===== */
+[data-theme="gray"] {
+  --bg-primary: #2b2b2b;
+  --bg-secondary: #333333;
+  --bg-card: #3a3a3a;
+  --bg-input: #404040;
+  --bg-hover: #4a4a4a;
+  --bg-active: #555555;
+  --border: #505050;
+  --border-focus: #9a9aff;
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --text-muted: #707070;
+  --accent: #9a9aff;
+  --accent-hover: #aaaaff;
+  --accent-glow: rgba(154,154,255,.2);
+  --green: #5dcc5d;
+  --green-bg: rgba(93,204,93,.1);
+  --red: #e06060;
+  --red-bg: rgba(224,96,96,.1);
+  --orange: #dda044;
+  --orange-bg: rgba(221,160,68,.1);
+  --cyan: #4db8b8;
+  --shadow: 0 4px 24px rgba(0,0,0,.4);
+  --step0-bg: rgba(154,154,255,.1);
+  --step1-bg: rgba(221,160,68,.1);
+  --step2-bg: rgba(236,72,153,.1);
+  --step3-bg: rgba(93,204,93,.1);
+  --step4-bg: rgba(124,58,237,.1);
+  --collapsible-toggle-bg: rgba(154,154,255,.1);
+  --collapsible-body-bg: #252525;
+}
+ html { font-size: 18px; }
 body {
   font-family: var(--font);
   background: var(--bg-primary);

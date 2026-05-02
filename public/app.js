@@ -222,7 +222,7 @@
   }
 
   // Restore theme from localStorage
-  var savedTheme = localStorage.getItem('bugDetective_theme') || 'dark';
+  var savedTheme = localStorage.getItem('bugDetective_theme') || 'light';
   document.documentElement.setAttribute('data-theme', savedTheme);
   function highlightThemeBtn(theme) {
     document.querySelectorAll('#themeBtns .preset-btn').forEach(function(btn) {
@@ -463,7 +463,7 @@
         analyzeStatusText.textContent = evt.text || '處理中...';
         var txt = (evt.text || '');
         if (txt.includes('Step 0') && txt.includes('去重')) setPipelineStep(0, 'active');
-        else if (txt.includes('Step 1') || txt.includes('LLM 智慧') || txt.includes('Chunk')) setPipelineStep(1, 'active');
+        else if (txt.includes('Step 1') || txt.includes('Drain') || txt.includes('Regex 萃取')) setPipelineStep(1, 'active');
         else if (txt.includes('Step 2') || txt.includes('統合')) setPipelineStep(2, 'active');
         else if (txt.includes('Step 3') || txt.includes('Hybrid') || txt.includes('搜尋')) setPipelineStep(3, 'active');
         else if (txt.includes('Step 4') || txt.includes('深度分析') || txt.includes('LLM')) setPipelineStep(4, 'active');
@@ -493,63 +493,65 @@
         var s1 = evt.data;
         var badge1 = document.createElement('div');
         badge1.className = 'step-badge step-badge-1';
-        // New chunked LLM pipeline: show chunk stats
-        if (s1.chunks_total !== undefined) {
-          badge1.innerHTML = '🧠 <b>Step 1</b> — LLM Log 解析：' +
-            s1.chunks_parsed + '/' + s1.chunks_total + ' 段' +
-            ' / 事件 ' + (s1.total_events||0) +
-            ' / 關鍵字 ' + (s1.total_keywords||0);
-          stepsContainer.appendChild(badge1);
-          // Collapsible: per-chunk details
-          var parts1 = [];
-          var chunkRes = s1.chunk_results || [];
-          for (var ci = 0; ci < chunkRes.length; ci++) {
-            var cr = chunkRes[ci];
-            if (!cr) continue;
-            var lines = ['  ── 片段 ' + (ci + 1) + ' ──'];
-            var events = cr.events || [];
-            var kws = cr.keywords || [];
-            var pats = cr.patterns || [];
-            if (events.length)
-              lines.push('  事件：' + events.map(function(e) {
-                var sev = e.severity || '?';
-                var icon = sev === 'critical' ? '🔴' : sev === 'high' ? '🟠' : sev === 'medium' ? '🟡' : '⚪';
-                return icon + ' ' + e.desc;
-              }).join('\n       '));
-            if (kws.length)
-              lines.push('  關鍵字：' + kws.slice(0, 10).join(', '));
-            if (pats.length)
-              lines.push('  模式：' + pats.slice(0, 5).join(', '));
-            parts1.push(lines.join('\n'));
+
+        // Drain3 + Regex pipeline
+        var drain = s1.drain || {};
+        var regex = s1.regex || {};
+        var drainAnomalies = drain.anomalies || [];
+
+        badge1.innerHTML = '🧠 <b>Step 1</b> — Drain3 Log 解析：' +
+          (drain.total_clusters || 0) + ' 模板' +
+          ' / ' + (drain.total_lines || 0) + ' 行' +
+          (drainAnomalies.length ? ' / <span style="color:var(--orange)">⚠️ ' + drainAnomalies.length + ' 個異常</span>' : '');
+        stepsContainer.appendChild(badge1);
+
+        // Anomaly summary block
+        if (drainAnomalies.length) {
+          var anomalyParts = drainAnomalies.map(function(a) {
+            return '⚠️ <b>' + a.template + '</b>（出現 ' + a.size + ' 次）— ' + (a.reason || '');
+          });
+          var anomalyHtml = '<div style="padding:8px 12px;margin:6px 0;border-radius:var(--radius-sm);background:var(--orange-bg);color:var(--orange);font-size:0.9rem;">' +
+            '<b>🔍 異常模板偵測</b>（罕見的錯誤/警告模板，可能是 Bug 關鍵線索）<br>' +
+            anomalyParts.join('<br>') + '</div>';
+          var tmpDiv = document.createElement('div');
+          tmpDiv.innerHTML = anomalyHtml;
+          stepsContainer.appendChild(tmpDiv.firstElementChild || tmpDiv);
+        }
+
+        // Collapsible: Drain cluster details
+        var drainParts = [];
+        var clusters = drain.clusters || [];
+        for (var ci = 0; ci < clusters.length; ci++) {
+          var c = clusters[ci];
+          var lines = [];
+          var isAnomaly = drainAnomalies.some(function(a) { return a.template === c.template; });
+          lines.push((isAnomaly ? '⚠️ ' : '') + '── 模板 ' + (ci + 1) + '（出現 ' + c.size + ' 次）' + (isAnomaly ? ' ⚠️ 異常' : '') + ' ──');
+          lines.push('  ' + c.template);
+          if (c.sample_lines && c.sample_lines.length) {
+            lines.push('  範例：' + c.sample_lines.slice(0, 2).join('\n         '));
           }
-          if (parts1.length) {
-            var blk1 = makeCollapsibleBlock('🧠 Step 1 各段解析明細', parts1.join('\n\n'));
-            if (blk1) stepsContainer.appendChild(blk1);
-          }
-        } else {
-          // Legacy regex extraction fallback
-          badge1.innerHTML = '🔧 <b>Step 1</b> — 萃取：錯誤碼 ' + (s1.error_codes||[]).length +
-            ' / 函式 ' + (s1.function_names||[]).length +
-            ' / 檔案 ' + (s1.file_paths||[]).length +
-            ' / 異常行 ' + (s1.error_lines_count||0);
-          stepsContainer.appendChild(badge1);
-          var parts1 = [];
-          if (s1.error_codes && s1.error_codes.length)
-            parts1.push('🔴 錯誤碼（' + s1.error_codes.length + '）：\n' + s1.error_codes.join('\n'));
-          if (s1.exceptions && s1.exceptions.length)
-            parts1.push('⚠️ 異常/信號（' + s1.exceptions.length + '）：\n' + s1.exceptions.join('\n'));
-          if (s1.function_names && s1.function_names.length)
-            parts1.push('🔧 函式名稱（' + s1.function_names.length + '）：\n' + s1.function_names.join('\n'));
-          if (s1.file_paths && s1.file_paths.length)
-            parts1.push('📁 檔案路徑（' + s1.file_paths.length + '）：\n' + s1.file_paths.join('\n'));
-          if (s1.memory_addresses && s1.memory_addresses.length)
-            parts1.push('💾 記憶體位址（' + s1.memory_addresses.length + '）：\n' + s1.memory_addresses.join('\n'));
-          if (s1.error_lines && s1.error_lines.length)
-            parts1.push('📋 錯誤行（前200）：\n' + s1.error_lines.join('\n'));
-          if (parts1.length) {
-            var blk1 = makeCollapsibleBlock('🔧 Step 1 萃取結果明細', parts1.join('\n\n'));
-            if (blk1) stepsContainer.appendChild(blk1);
-          }
+          drainParts.push(lines.join('\n'));
+        }
+        if (drainParts.length) {
+          var blk1 = makeCollapsibleBlock('🧠 Step 1 Drain 模板明細（前 ' + clusters.length + ' 個）', drainParts.join('\n\n'));
+          if (blk1) stepsContainer.appendChild(blk1);
+        }
+
+        // Collapsible: Regex extraction details
+        var regexParts = [];
+        if (regex.error_codes && regex.error_codes.length)
+          regexParts.push('🔴 錯誤碼（' + regex.error_codes.length + '）：\n' + regex.error_codes.join('\n'));
+        if (regex.function_names && regex.function_names.length)
+          regexParts.push('🔧 函式名稱（' + regex.function_names.length + '）：\n' + regex.function_names.join('\n'));
+        if (regex.file_paths && regex.file_paths.length)
+          regexParts.push('📁 檔案路徑（' + regex.file_paths.length + '）：\n' + regex.file_paths.join('\n'));
+        if (regex.exceptions && regex.exceptions.length)
+          regexParts.push('⚠️ 異常/信號（' + regex.exceptions.length + '）：\n' + regex.exceptions.join('\n'));
+        if (regex.memory_addresses && regex.memory_addresses.length)
+          regexParts.push('💾 記憶體位址（' + regex.memory_addresses.length + '）：\n' + regex.memory_addresses.join('\n'));
+        if (regexParts.length) {
+          var blk1r = makeCollapsibleBlock('🔧 Step 1 Regex 萃取結果', regexParts.join('\n\n'));
+          if (blk1r) stepsContainer.appendChild(blk1r);
         }
         break;
       case 'step2_result':
@@ -569,7 +571,7 @@
         if (s2.semantic && s2.semantic.length)
           parts2.push('🟣 語意關鍵字（' + s2.semantic.length + '）：\n' + s2.semantic.map(function(k,i){return '  '+(i+1)+'. '+k;}).join('\n'));
         if (parts2.length) {
-          var blk2 = makeCollapsibleBlock('🔀 Step 2 統合分析結果', parts2.join('\n\n'));
+          var blk2 = makeCollapsibleBlock('🔀 Step 2 關鍵字提取結果', parts2.join('\n\n'));
           if (blk2) stepsContainer.appendChild(blk2);
         }
         break;
