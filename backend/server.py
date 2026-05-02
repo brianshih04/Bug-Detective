@@ -160,7 +160,7 @@ async def get_llm_config():
     cfg = load_llm_config()
     # Never expose full API key to frontend
     if cfg.get("api_key"):
-        cfg["api_key_masked"] = cfg["api_key"][:8] + "***"
+        cfg["api_key_set"] = True
         cfg["api_key"] = ""
     return cfg
 
@@ -172,7 +172,7 @@ async def put_llm_config(req: LLMConfigRequest):
     cfg = save_llm_config(data)
     # Check if there's a key on disk (from .env preset)
     if cfg.get("api_key"):
-        cfg["api_key_masked"] = cfg["api_key"][:8] + "***"
+        cfg["api_key_set"] = True
         cfg["api_key"] = ""
     return cfg
 
@@ -182,7 +182,7 @@ async def get_presets():
     for k, v in LLM_PRESETS.items():
         p = dict(v)
         if p.get("api_key"):
-            p["api_key_masked"] = p["api_key"][:8] + "***"
+            p["api_key_set"] = True
             p["api_key"] = ""
         presets[k] = p
     return presets

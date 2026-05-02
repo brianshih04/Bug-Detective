@@ -847,9 +847,9 @@
           var masked = _apiKey.slice(0, 6) + '...' + _apiKey.slice(-4);
           cfgApiKey.value = '';
           cfgApiKey.placeholder = masked + '（瀏覽器已記住）';
-        } else if (cfg.api_key_masked) {
+        } else if (cfg.api_key_set) {
           cfgApiKey.value = '';
-          cfgApiKey.placeholder = cfg.api_key_masked + '（曾設定）';
+          cfgApiKey.placeholder = 'sk-...（伺服器已設定）';
         } else {
           cfgApiKey.value = '';
         cfgApiKey.placeholder = 'sk-...';
@@ -1065,10 +1065,10 @@
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
-    // XSS: block javascript: scheme in links
+    // XSS: block javascript:/data:/vbscript: schemes, escape link text & URL
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
-      if (/^javascript\s*:/i.test(url)) return escapeHtml(text);
-      return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
+      if (/^\s*(javascript|data|vbscript)\s*:/i.test(url)) return escapeHtml(text);
+      return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">' + escapeHtml(text) + '</a>';
     });
 
     html = html.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');

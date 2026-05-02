@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files
 .env
+.env.*
 !.env.example
 
 # vercel
@@ -66,4 +67,3 @@ data/llm-config.json
 
 # Logs
 *.log
-.env.spark
