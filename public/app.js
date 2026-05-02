@@ -519,50 +519,14 @@
           analysisContent.innerHTML = '';
         }
         analysisRawText += (evt.text || '');
-        // Incremental render: only re-render last 2000 chars for speed,
-        // preserve already-rendered HTML before that boundary.
-        var _prevLen = analysisContent.getAttribute('data-rendered-len') || '0';
-        _prevLen = parseInt(_prevLen, 10) || 0;
-        if (_prevLen === 0) {
-          // First chunk — full render
-          analysisContent.innerHTML = renderMarkdown(analysisRawText);
-        } else {
-          // Find a safe split point (start of a line) near _prevLen
-          var _splitAt = _prevLen;
-          var _lookback = Math.min(analysisRawText.length - _prevLen, 500);
-          for (var _i = _prevLen; _i < analysisRawText.length; _i++) {
-            if (_i > _prevLen && analysisRawText[_i] === '\n') {
-              _splitAt = _i;
-              break;
-            }
-          }
-          // If no newline found nearby, use a bigger window
-          if (_splitAt === _prevLen && analysisRawText.length > _prevLen + 200) {
-            _splitAt = analysisRawText.lastIndexOf('\n', _prevLen + 200);
-            if (_splitAt <= _prevLen) _splitAt = _prevLen;
-          }
-          // Re-render the tail portion
-          var _tail = analysisRawText.substring(Math.max(0, _splitAt - 200));
-          var _tailHtml = renderMarkdown(_tail);
-          // Trim the already-rendered part: find the last complete block
-          var _placeholder = '<span id=\"_inc_marker\"></span>';
-          analysisContent.innerHTML = analysisContent.innerHTML + _placeholder;
-          var _marker = document.getElementById('_inc_marker');
-          if (_marker && _marker.previousSibling) {
-            var _container = document.createElement('div');
-            _container.innerHTML = _tailHtml;
-            // Remove everything after the marker
-            while (_marker.nextSibling) _marker.parentNode.removeChild(_marker.nextSibling);
-            _marker.parentNode.removeChild(_marker);
-            // Append new rendered content
-            while (_container.firstChild) {
-              analysisContent.appendChild(_container.firstChild);
-            }
-          } else {
+        // Throttle rendering: skip if previous render is still pending
+        if (!analysisContent._renderPending) {
+          analysisContent._renderPending = true;
+          requestAnimationFrame(function() {
             analysisContent.innerHTML = renderMarkdown(analysisRawText);
-          }
+            analysisContent._renderPending = false;
+          });
         }
-        analysisContent.setAttribute('data-rendered-len', String(analysisRawText.length));
         analysisContent.classList.remove('streaming-cursor');
         if (isAnalyzing) analysisContent.classList.add('streaming-cursor');
         // Auto-scroll analysis
@@ -573,9 +537,8 @@
         setPipelineStep(4, 'done');
         stopPipelineTimer();
         analyzeStatusText.textContent = '分析完成 ✓';
-        // Final full re-render to fix any incremental artifacts
+        // Final full re-render
         if (analysisRawText) {
-          analysisContent.removeAttribute('data-rendered-len');
           analysisContent.innerHTML = renderMarkdown(analysisRawText);
         }
         analysisContent.classList.remove('streaming-cursor');
