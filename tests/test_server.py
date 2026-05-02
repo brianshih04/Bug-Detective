@@ -134,3 +134,42 @@ class TestCORSPolicy:
         # Should NOT get a wildcard allow-origin
         if "access-control-allow-origin" in res.headers:
             assert res.headers["access-control-allow-origin"] != "*"
+
+
+class TestSecurityHeaders:
+    """Security headers should be present on all responses."""
+
+    def test_x_content_type_options(self):
+        res = client.get("/api/health")
+        assert res.headers.get("x-content-type-options") == "nosniff"
+
+    def test_x_frame_options(self):
+        res = client.get("/api/health")
+        assert res.headers.get("x-frame-options") == "DENY"
+
+    def test_referrer_policy(self):
+        res = client.get("/api/health")
+        assert "strict-origin" in res.headers.get("referrer-policy", "")
+
+
+class TestRateLimiting:
+    """Rate limiting on expensive endpoints."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_rate_limits(self):
+        """Clear rate limit state between tests."""
+        from server import _RATE_LIMITS
+        _RATE_LIMITS.clear()
+        yield
+
+    def test_analyze_rate_limit(self):
+        """Should return 429 after too many analyze requests."""
+        payload = {"log_text": "x" * 500, "bug_description": "test"}
+        # Clear cache for analyze validation
+        _LLM_CONFIG_CACHE["data"] = None
+        for _ in range(5):
+            res = client.post("/api/analyze", json=payload)
+            # May be 200 or other non-429, but not rate limited yet
+        # 6th should be rate limited
+        res = client.post("/api/analyze", json=payload)
+        assert res.status_code == 429

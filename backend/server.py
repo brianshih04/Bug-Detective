@@ -2,8 +2,10 @@
 import json
 import os
 import subprocess
-from pathlib import Path
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 import httpx
@@ -80,6 +82,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Bug-Detective", version="2.0", lifespan=lifespan)
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "0"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
 # --- CORS ---
 app.add_middleware(
     CORSMiddleware,
@@ -95,6 +107,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Rate limiting (in-memory sliding window) ---
+_RATE_LIMITS = defaultdict(list)  # ip → [timestamps]
+_RATE_WINDOW = 60          # seconds
+_RATE_MAX_REQUESTS = 30    # per window per IP
+_RATE_ANALYZE_WINDOW = 120
+_RATE_MAX_ANALYZE = 5      # analyze is expensive
+
+def _check_rate_limit(ip: str, window: int, max_req: int) -> bool:
+    """Return True if request should be allowed."""
+    now = time.time()
+    timestamps = _RATE_LIMITS[ip]
+    # Prune old entries
+    _RATE_LIMITS[ip] = [t for t in timestamps if now - t < window]
+    if len(_RATE_LIMITS[ip]) >= max_req:
+        return False
+    _RATE_LIMITS[ip].append(now)
+    return True
 
 # --- Static files ---
 if PUBLIC_DIR.exists():
@@ -153,8 +183,11 @@ async def search(req: SearchRequest):
     return {"query": req.query, "results": results, "count": len(results)}
 
 @app.post("/api/analyze")
-async def analyze(req: AnalyzeRequest):
+async def analyze(req: AnalyzeRequest, request: Request):
     """Full RCA pipeline with SSE streaming."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip, _RATE_ANALYZE_WINDOW, _RATE_MAX_ANALYZE):
+        raise HTTPException(429, f"Rate limit: max {_RATE_MAX_ANALYZE} analyze requests per {_RATE_ANALYZE_WINDOW}s")
     async def event_stream() -> AsyncGenerator[str, None]:
         async for chunk in full_rca_stream(req.log_text, req.bug_description, req.api_key, top_k=req.top_k, batch_size=req.batch_size, max_tokens=req.max_tokens, timeout=req.timeout):
             yield chunk

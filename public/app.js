@@ -282,9 +282,9 @@
     }
   }
 
-  // API key persisted in browser localStorage (never sent to server disk)
-  const API_KEY_STORAGE = 'bugDetective_apiKey';
-  let _apiKey = localStorage.getItem(API_KEY_STORAGE) || '';
+  // API key in sessionStorage only (cleared when browser tab closes)
+  const API_KEY_STORAGE='bugDetectiveApiKey';
+  let _apiKey = sessionStorage.getItem(API_KEY_STORAGE) || '';
 
   // Update LLM status bar (provider, model, API key)
   function updateApiKeyStatus() {
@@ -913,7 +913,7 @@
   // Save settings
   btnSaveSettings.addEventListener('click', async function() {
     _apiKey = cfgApiKey.value.trim();
-    localStorage.setItem(API_KEY_STORAGE, _apiKey);
+    sessionStorage.setItem(API_KEY_STORAGE, _apiKey);
     updateApiKeyStatus();
     try {
       var res = await fetch(API + '/api/llm-config', {

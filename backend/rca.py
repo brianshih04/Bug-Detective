@@ -619,7 +619,10 @@ async def vector_search(query: str, top_k: int = 15) -> list[dict]:
         retriever = get_retriever(similarity_top_k=top_k)
         query_bundle = QueryBundle(query_str=query)
         loop = asyncio.get_running_loop()
-        nodes = await loop.run_in_executor(None, retriever.retrieve, query_bundle)
+        nodes = await asyncio.wait_for(
+            loop.run_in_executor(None, retriever.retrieve, query_bundle),
+            timeout=30,
+        )
 
         results = []
         for node in nodes:
