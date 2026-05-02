@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bug-Detective v2</title>
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
 
@@ -79,6 +79,14 @@
               <option value="50">搜尋 50 筆</option>
               <option value="80">搜尋 80 筆</option>
               <option value="100" selected>搜尋 100 筆</option>
+            </select>
+            <label for="batchSizeSelect" style="margin-left:0.5rem">分批</label>
+            <select id="batchSizeSelect" aria-label="Step4 分批大小">
+              <option value="0">不分批</option>
+              <option value="10">每批 10</option>
+              <option value="20" selected>每批 20</option>
+              <option value="30">每批 30</option>
+              <option value="50">每批 50</option>
             </select>
           </div>
           <div style="display:flex;align-items:center;gap:10px;">
@@ -281,6 +289,6 @@
   <span>Bug-Detective v2</span> · FastAPI + RAG + LLM · 繁體中文介面
 </footer>
 
-<script src="/static/app.js?v=3"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>

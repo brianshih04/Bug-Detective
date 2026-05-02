@@ -205,6 +205,12 @@
     $('topKSelect').value = savedTopK;
   }
 
+  // Restore batch_size preference from localStorage
+  var savedBatchSize = localStorage.getItem('bugDetective_batchSize');
+  if (savedBatchSize && $('batchSizeSelect').querySelector('option[value="' + savedBatchSize + '"]')) {
+    $('batchSizeSelect').value = savedBatchSize;
+  }
+
   // ===== SKELETON HELPERS =====
   function showSearchSkeleton() {
     searchCard.classList.remove('hidden');
@@ -320,11 +326,12 @@
       var res = await fetch(API + '/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 100, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
+        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 100, batch_size: parseInt($('batchSizeSelect').value) || 20, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
         signal: currentController.signal
       });
 
       localStorage.setItem('bugDetective_topK', $('topKSelect').value);
+      localStorage.setItem('bugDetective_batchSize', $('batchSizeSelect').value);
 
       if (!res.ok) {
         throw new Error('HTTP ' + res.status);

@@ -29,6 +29,7 @@ class AnalyzeRequest(BaseModel):
     bug_description: str = ""
     api_key: str = ""  # passed from client, never persisted
     top_k: int = 100  # number of search results for RCA
+    batch_size: int = 20  # files per batch in Step 4 (0 = no batching)
     max_tokens: int = 0  # 0 = use server default from llm-config
     timeout: int = 0  # 0 = use server default from llm-config
 
@@ -144,7 +145,7 @@ async def search(req: SearchRequest):
 async def analyze(req: AnalyzeRequest):
     """Full RCA pipeline with SSE streaming."""
     async def event_stream() -> AsyncGenerator[str, None]:
-        async for chunk in full_rca_stream(req.log_text, req.bug_description, req.api_key, top_k=req.top_k, max_tokens=req.max_tokens, timeout=req.timeout):
+        async for chunk in full_rca_stream(req.log_text, req.bug_description, req.api_key, top_k=req.top_k, batch_size=req.batch_size, max_tokens=req.max_tokens, timeout=req.timeout):
             yield chunk
 
     return StreamingResponse(
