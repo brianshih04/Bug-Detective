@@ -105,7 +105,7 @@ def _git_version():
             cwd=str(base), stderr=subprocess.DEVNULL, timeout=5,
         ).decode().strip()
         status = subprocess.check_output(
-            ["git", "status", "--porcelain"],
+            ["git", "diff", "--name-only", "HEAD"],
             cwd=str(base), stderr=subprocess.DEVNULL, timeout=5,
         ).decode().strip()
         dirty = "*" if status else ""
