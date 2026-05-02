@@ -537,6 +537,7 @@
         badge4.className = 'step-badge step-badge-4';
         badge4.innerHTML = '🚀 <b>Step 4</b> — RCA 深度分析完成';
         stepsContainer.appendChild(badge4);
+        $('btnExportMd').style.display = '';
         break;
     }
   }
@@ -546,6 +547,72 @@
       currentController.abort();
     }
   }
+
+  // ===== EXPORT ANALYSIS TO MARKDOWN =====
+  $('btnExportMd').addEventListener('click', function() {
+    if (!analysisRawText.trim()) {
+      showToast('沒有分析結果可匯出', 'error');
+      return;
+    }
+    // Collect pipeline step badges
+    var badges = stepsContainer.querySelectorAll('.step-badge');
+    var steps = [];
+    badges.forEach(function(b) {
+      steps.push('- ' + b.textContent.trim());
+    });
+
+    // Build MD content
+    var now = new Date();
+    var ts = now.getFullYear() + '-' +
+      String(now.getMonth()+1).padStart(2,'0') + '-' +
+      String(now.getDate()).padStart(2,'0') + ' ' +
+      String(now.getHours()).padStart(2,'0') + ':' +
+      String(now.getMinutes()).padStart(2,'0');
+
+    var md = '# Bug-Detective RCA 分析報告\n\n';
+    md += '**生成時間：** ' + ts + '\n\n';
+
+    if (steps.length) {
+      md += '## Pipeline 步驟\n\n';
+      md += steps.join('\n') + '\n\n';
+    }
+
+    // Search results summary
+    var searchItems = searchBody.querySelectorAll('.search-result-item');
+    if (searchItems.length) {
+      md += '## 關鍵字搜尋結果\n\n';
+      md += '共 ' + searchItems.length + ' 筆匹配\n\n';
+      md += '### 匹配檔案\n\n';
+      searchItems.forEach(function(item, idx) {
+        var path = item.querySelector('.search-result-path');
+        var score = item.querySelector('.score-bar-fill');
+        if (path) {
+          var scoreText = score ? score.parentElement.textContent.trim() : '';
+          md += (idx+1) + '. `' + path.textContent + '`' + (scoreText ? ' — ' + scoreText : '') + '\n';
+        }
+      });
+      md += '\n';
+    }
+
+    md += '## AI 根因分析\n\n';
+    md += analysisRawText + '\n';
+
+    // Download
+    var blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'RCA_' + now.getFullYear() +
+      String(now.getMonth()+1).padStart(2,'0') +
+      String(now.getDate()).padStart(2,'0') + '_' +
+      String(now.getHours()).padStart(2,'0') +
+      String(now.getMinutes()).padStart(2,'0') + '.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('已匯出 Markdown 報告', 'success');
+  });
 
   // ===== RENDER SEARCH RESULTS (collapsible) =====
   function renderSearchResults(results) {
