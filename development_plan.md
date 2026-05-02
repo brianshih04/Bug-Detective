@@ -3,7 +3,7 @@
 > Generated: 2026-05-02
 > Method: Five-Axis Code Review (Correctness, Readability, Architecture, Security, Performance)
 > Scope: All active source files — backend, frontend, tests, config
-> Version: v2.5.0 (dev branch, Sprint 3 complete)
+> Version: v2.5.0 (main branch, Sprint 3 complete)
 > Previous plans: v3 (`development_plan.md` Sprint 2c), v2.4 (`improvement_plan.md`), v2.3 (first `development_plan.md`)
 
 ---

@@ -4,6 +4,22 @@
 
 ---
 
+## [2.5.0] - 2026-05-03
+
+### 新增
+
+- **🔄 預設值按鈕** — Settings Modal 最上方新增「預設值」按鈕，一鍵重設所有設定（Ollama + Qwen3.6:35b / 16000 tokens / 600s timeout / 灰色主題 / 16px 字體 / 關鍵字 50 / 溫度 0.3）
+- **Phase B 清空 Thinking** — Phase A 批次分析完成後、Phase B 統整開始前，自動清空 thinking panel，避免大量舊思考內容干擾
+- **Thinking Panel 即時預覽** — Phase B 的 content token 同時 append 到 thinking panel（分隔線隔開），作為即時串流預覽兼 keepalive
+- **DeepSeek API Key 預設** — DeepSeek preset 自帶 API Key（via `DEEPSEEK_API_KEY` env var），點按鈕即可使用
+
+### 變更
+
+- **LLM 溫度上限** — 從 2.0 降為 1.0（RCA 分析場景不需要高隨機性）
+- **Phase B keepalive** — 統整分析超過 15 秒無新 token 時，自動送出「🔄 統整分析中...」status event，防止 Cloudflare tunnel 斷線
+
+---
+
 ## [2.4.0] - 2026-05-02
 
 ### 修復
