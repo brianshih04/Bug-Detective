@@ -7,15 +7,14 @@ INFERNO_ROOT="/home/avuser/infernoStart01"
 
 echo "=== Bug Detective Deploy ==="
 
-# 1. Install Node.js deps
+# 1. Install Python deps
 cd "$PROJECT_DIR"
-echo "[1/5] Installing Node.js dependencies..."
-npm install --omit=dev 2>/dev/null || npm install
+echo "[1/5] Installing Python dependencies..."
+pip3 install --user -r requirements.txt 2>/dev/null || pip3 install -r requirements.txt
 
-# 2. Install Python deps (for embedding search)
-echo "[2/5] Installing Python dependencies..."
-pip3 install --user numpy onnxruntime-gpu tokenizers huggingface_hub 2>/dev/null || \
-  pip3 install numpy onnxruntime-gpu tokenizers huggingface_hub
+# 2. Install Node.js deps (for embed-search.py and build scripts)
+echo "[2/5] Installing Node.js dependencies..."
+npm install --omit=dev 2>/dev/null || npm install
 
 # 3. Build code index
 echo "[3/5] Building code index..."
@@ -25,10 +24,10 @@ python3 scripts/build-index.py
 echo "[4/5] Building embedding index..."
 python3 scripts/build-embeddings.py --rebuild
 
-# 5. Start server
+# 5. Start FastAPI server
 echo "[5/5] Starting server on port 17580..."
 export INFERNO_ROOT="$INFERNO_ROOT"
-nohup node --env-file=.env server.mjs > /home/avuser/bug-detective/server.log 2>&1 &
+setsid .venv/bin/python -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 > /home/avuser/bug-detective/server.log 2>&1 < /dev/null &
 echo $! > /home/avuser/bug-detective/server.pid
 echo "Server started with PID $(cat /home/avuser/bug-detective/server.pid)"
 echo ""

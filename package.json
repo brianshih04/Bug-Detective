@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "7zip-bin": "^5.2.0",
+    "cors": "^2.8.6",
     "express": "^5.1.0",
     "fflate": "^0.8.2"
   }

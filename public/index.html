@@ -277,6 +277,15 @@
         <input type="number" id="cfgTimeout" min="10" max="3600" step="10" placeholder="600">
       </div>
       <div class="form-group">
+        <label for="cfgTheme">主題配色</label>
+        <div class="preset-btns" id="themeBtns" role="group" aria-label="主題配色">
+          <button class="preset-btn" data-theme="light">☀️ 亮色</button>
+          <button class="preset-btn" data-theme="dark">🌙 暗色</button>
+          <button class="preset-btn" data-theme="black">🖤 純黑</button>
+          <button class="preset-btn" data-theme="coffee">☕ 咖啡</button>
+        </div>
+      </div>
+      <div class="form-group">
         <label for="cfgFontSize">字體大小 <span id="fontSizeValue" style="font-weight:normal;color:var(--text-muted);font-size:12px;">15px</span></label>
         <input type="range" id="cfgFontSize" min="12" max="20" step="1" value="15" style="width:100%;accent-color:var(--accent);">
       </div>

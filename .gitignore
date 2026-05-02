@@ -66,3 +66,4 @@ data/llm-config.json
 
 # Logs
 *.log
+.env.spark

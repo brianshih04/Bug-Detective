@@ -1,8 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { execSync, exec } from "child_process";
+import { execSync, exec, execFile } from "child_process";
 import express from "express";
+import cors from "cors";
 import * as fflate from "fflate";
 import { path7za } from "7zip-bin";
 
@@ -26,6 +27,10 @@ const LLM_CONFIG_PATH = path.join(__dirname, "data", "llm-config.json");
 try { llmConfig = { ...llmConfig, ...JSON.parse(fs.readFileSync(LLM_CONFIG_PATH, "utf-8")) }; } catch {}
 
 const app = express();
+app.use(cors({
+  origin: ["http://localhost:17580", "http://127.0.0.1:17580", "https://bug.avision-gb10.org"],
+  credentials: true,
+}));
 app.use(express.json({ limit: "50mb" }));
 
 // --- Index loading ---
@@ -195,8 +200,8 @@ function embedSearch(query, topK = 10) {
     const script = path.join(__dirname, "scripts", "embed-search.py");
     const env = { ...process.env };
     if (process.env.VLLM_EMBED_URL) env.VLLM_EMBED_URL = process.env.VLLM_EMBED_URL;
-    const cmd = `${process.env.EMBED_PYTHON || "python3"} "${script}" ${JSON.stringify(query)} --top ${topK}`;
-    exec(cmd, { timeout: 30_000, maxBuffer: 50 * 1024 * 1024, env }, (err, stdout, stderr) => {
+    const python = process.env.EMBED_PYTHON || "python3";
+    execFile(python, [script, query, "--top", String(topK)], { timeout: 30_000, maxBuffer: 50 * 1024 * 1024, env }, (err, stdout, stderr) => {
       if (err) {
         console.error("Embed search error:", stderr?.slice(0, 500));
         return reject(new Error(stderr?.slice(0, 200) || err.message));
@@ -1169,7 +1174,10 @@ app.put("/api/llm-config", (req, res) => {
   if (baseUrl) llmConfig.baseUrl = baseUrl.replace(/\/+$/, "");
   if (apiKey !== undefined) llmConfig.apiKey = apiKey;
   if (model) llmConfig.model = model;
-  fs.writeFileSync(LLM_CONFIG_PATH, JSON.stringify(llmConfig, null, 2));
+  // Never persist apiKey to disk — only lives in client browser memory
+  const diskConfig = { ...llmConfig };
+  delete diskConfig.apiKey;
+  fs.writeFileSync(LLM_CONFIG_PATH, JSON.stringify(diskConfig, null, 2));
   console.log("LLM config updated:", { baseUrl: llmConfig.baseUrl, model: llmConfig.model, hasKey: !!llmConfig.apiKey });
   res.json({ ok: true });
 });

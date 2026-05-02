@@ -221,6 +221,25 @@
     if (label) { label.textContent = savedFontSize + 'px'; }
   }
 
+  // Restore theme from localStorage
+  var savedTheme = localStorage.getItem('bugDetective_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+  function highlightThemeBtn(theme) {
+    document.querySelectorAll('#themeBtns .preset-btn').forEach(function(btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-theme') === theme);
+    });
+  }
+  highlightThemeBtn(savedTheme);
+
+  // Theme button click — instant preview
+  document.querySelectorAll('#themeBtns .preset-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var theme = this.getAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', theme);
+      highlightThemeBtn(theme);
+    });
+  });
+
   // Font size slider live preview
   var fontSizeSlider = $('cfgFontSize');
   if (fontSizeSlider) {
@@ -354,6 +373,8 @@
       localStorage.setItem('bugDetective_topK', $('topKSelect').value);
       localStorage.setItem('bugDetective_batchSize', $('batchSizeSelect').value);
       localStorage.setItem('bugDetective_fontSize', $('cfgFontSize').value);
+      var activeTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+      localStorage.setItem('bugDetective_theme', activeTheme);
 
       if (!res.ok) {
         throw new Error('HTTP ' + res.status);
