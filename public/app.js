@@ -526,9 +526,16 @@
           analysisContent.innerHTML = '';
         }
         analysisRawText += (evt.text || '');
-        analysisContent.innerHTML = renderMarkdown(analysisRawText);
-        analysisContent.classList.remove('streaming-cursor');
-        if (isAnalyzing) analysisContent.classList.add('streaming-cursor');
+        // During streaming: show raw text via textContent (O(1) per chunk, no markdown parsing)
+        if (!analysisContent.querySelector('.stream-raw-text')) {
+          analysisContent.innerHTML = '';
+          var pre = document.createElement('pre');
+          pre.className = 'stream-raw-text';
+          pre.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;font-family:inherit;line-height:1.7;margin:0;padding:1rem;color:inherit;background:transparent;';
+          analysisContent.appendChild(pre);
+        }
+        analysisContent.querySelector('.stream-raw-text').textContent = analysisRawText;
+        analysisContent.classList.add('streaming-cursor');
         // Auto-scroll analysis
         var panel = analysisContent.closest('.result-panel');
         if (panel) panel.scrollTop = panel.scrollHeight;
@@ -537,6 +544,10 @@
         setPipelineStep(4, 'done');
         stopPipelineTimer();
         analyzeStatusText.textContent = '分析完成 ✓';
+        // Final render: replace raw text with markdown-formatted HTML (single call)
+        if (analysisRawText) {
+          analysisContent.innerHTML = renderMarkdown(analysisRawText);
+        }
         analysisContent.classList.remove('streaming-cursor');
         thinkingSpinner.style.display = 'none';
         showToast('分析完成', 'success');
