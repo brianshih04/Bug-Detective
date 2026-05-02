@@ -5,6 +5,34 @@
 
 ---
 
+## [2.2.0] - 2026-05-02
+
+### 新增
+- **前端架構重構** — `index.html`（1900+ 行）拆分為 `index.html` + `style.css` + `app.js` 三個獨立檔案
+- **Pipeline 步驟圖示化** — 步驟圓圈從數字（0-4）改為 SVG 圖示（過濾器、文件、大腦、搜尋、警告三角），提升辨識度
+- **Loading Skeleton** — 搜尋結果與分析區塊加入 shimmer 骨架屏，取代空白 spinner
+- **鍵盤快捷鍵** — `Ctrl+Enter` 快速分析、`Ctrl+K` 聚焦搜尋框，UI 上顯示 `<kbd>` 提示
+- **Toast 堆疊管理** — 最多同時顯示 5 則通知，超過自動移除最舊；新增滑出動畫
+- **空狀態改善** — 搜尋無結果和初始頁面加入引導文字與操作提示
+
+### 變更
+- **Pipeline 步驟 Badge 統一暗色主題** — 移除 JS 中 20+ 處硬編碼亮色背景（`#f0f4ff`、`#fef9c3` 等），全部改用 CSS 變數（`--step0-bg` ~ `--step4-bg`），深色主題視覺一致
+- **折疊區塊統一暗色主題** — `makeCollapsibleBlock()` 改用 CSS class（`collapsible-block`、`collapsible-toggle`），移除所有 inline style 硬編碼顏色
+- **ARIA 無障礙標籤** — 所有互動元素加入 `aria-label`、`role`、`aria-expanded`、`aria-hidden`；Pipeline 步驟加入 `role="listitem"` 與動態 `aria-label`
+- **Modal Focus Trap** — 設定 Modal 開啟時 Tab 鍵循環在 Modal 內、Escape 關閉、關閉後還原焦點
+- **按鈕 Ripple 效果** — 點擊按鈕時產生水波紋動畫
+- **Focus-visible 樣式** — 所有互動元素加入 `focus-visible` 高亮外框，鍵盤導航時清晰可見
+- **搜尋結果鍵盤支援** — 展開/摺疊可透過 `Enter` / `Space` 鍵操作
+- **設定 Modal 可點擊背景關閉** — 還原原本被註解的功能
+- **響應式佈局增強** — 新增 1100px 斷點、600px 以下 Pipeline 改為無連接線排列、LLM 狀態列垂直堆疊
+- **分析結果自動捲動** — 串流輸出時結果面板自動捲動至最新內容
+- **分析失敗時聚焦輸入** — 未輸入描述時自動聚焦 Bug 描述欄位
+
+### 移除
+- JS 中所有硬編碼的 hex 顏色值（`#6366f1`、`#4b5563`、`#ca8a04`、`#ec4899` 等），全部遷移至 CSS 變數
+
+---
+
 ## [2.1.0] - 2026-05-02
 
 ### 新增
