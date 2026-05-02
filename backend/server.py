@@ -29,6 +29,8 @@ class AnalyzeRequest(BaseModel):
     bug_description: str = ""
     api_key: str = ""  # passed from client, never persisted
     top_k: int = 20  # number of search results for RCA
+    max_tokens: int = 0  # 0 = use server default from llm-config
+    timeout: int = 0  # 0 = use server default from llm-config
 
 class SearchRequest(BaseModel):
     query: str
@@ -39,6 +41,8 @@ class LLMConfigRequest(BaseModel):
     api_key: str = ""
     model: str = ""
     provider: str = ""
+    max_tokens: int = 4096
+    timeout: int = 300
 
 class FetchModelsRequest(BaseModel):
     base_url: str
@@ -136,7 +140,7 @@ async def search(req: SearchRequest):
 async def analyze(req: AnalyzeRequest):
     """Full RCA pipeline with SSE streaming."""
     async def event_stream() -> AsyncGenerator[str, None]:
-        async for chunk in full_rca_stream(req.log_text, req.bug_description, req.api_key, top_k=req.top_k):
+        async for chunk in full_rca_stream(req.log_text, req.bug_description, req.api_key, top_k=req.top_k, max_tokens=req.max_tokens, timeout=req.timeout):
             yield chunk
 
     return StreamingResponse(

@@ -41,7 +41,9 @@ DEFAULT_LLM_CONFIG = {
     "base_url": OLLAMA_URL + "/v1",
     "api_key": "",
     "model": OLLAMA_MODEL,
-    "provider": "ollama"
+    "provider": "ollama",
+    "max_tokens": 4096,
+    "timeout": 300,
 }
 
 def load_llm_config() -> dict:
@@ -74,30 +76,40 @@ LLM_PRESETS = {
         "base_url": OLLAMA_URL + "/v1",
         "api_key": "",
         "model": OLLAMA_MODEL,
-        "provider": "ollama"
+        "provider": "ollama",
+        "max_tokens": 4096,
+        "timeout": 300,
     },
     "glm5": {
         "base_url": GLM5_BASE_URL,
         "api_key": GLM5_API_KEY,
         "model": GLM5_MODEL,
-        "provider": "glm5"
+        "provider": "glm5",
+        "max_tokens": 4096,
+        "timeout": 120,
     },
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": "",
         "model": "",
-        "provider": "openrouter"
+        "provider": "openrouter",
+        "max_tokens": 4096,
+        "timeout": 120,
     },
     "minimax": {
         "base_url": "https://api.minimax.io/v1",
         "api_key": "",
         "model": "",
-        "provider": "minimax"
+        "provider": "minimax",
+        "max_tokens": 4096,
+        "timeout": 120,
     },
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "api_key": "",
         "model": "deepseek-chat",
-        "provider": "deepseek"
+        "provider": "deepseek",
+        "max_tokens": 4096,
+        "timeout": 120,
     }
 }

@@ -10,7 +10,9 @@
       "Bash(git checkout *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(awk '{total += $1} END {print \"Total lines:\", total}')",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('data/code-index.json'\\)\\); print\\(f'files: {len\\(d[\\\\\"files\\\\\"]\\)}, chunks: {len\\(d[\\\\\"chunks\\\\\"]\\)}'\\); c=d['chunks'][0]; print\\(f'First chunk keys: {list\\(c.keys\\(\\)\\)}'\\); print\\(f'Content length: {len\\(c.get\\(\\\\\"content\\\\\",\\\\\"\\\\\"\\)\\)}'\\)\")"
     ]
   }
 }

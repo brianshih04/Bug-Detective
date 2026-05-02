@@ -45,6 +45,8 @@
   const apiKeyGroup = $('apiKeyGroup');
   const apiKeyHint = $('apiKeyHint');
   const cfgModel = $('cfgModel');
+  const cfgMaxTokens = $('cfgMaxTokens');
+  const cfgTimeout = $('cfgTimeout');
   const modelList = $('modelList');
   const presetBtns = $('presetBtns');
 
@@ -318,7 +320,7 @@
       var res = await fetch(API + '/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 20 }),
+        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 20, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
         signal: currentController.signal
       });
 
@@ -722,9 +724,11 @@
           cfgApiKey.placeholder = cfg.api_key_masked + '（曾設定）';
         } else {
           cfgApiKey.value = '';
-          cfgApiKey.placeholder = 'sk-...';
+        cfgApiKey.placeholder = 'sk-...';
         }
         cfgModel.value = cfg.model || '';
+        cfgMaxTokens.value = cfg.max_tokens || '';
+        cfgTimeout.value = cfg.timeout || '';
       }
       if (presetsRes.ok) {
         var presets = await presetsRes.json();
@@ -766,6 +770,8 @@
         cfgBaseUrl.value = cfg.base_url || '';
         cfgApiKey.value = '';
         cfgModel.value = cfg.model || '';
+        cfgMaxTokens.value = cfg.max_tokens || '';
+        cfgTimeout.value = cfg.timeout || '';
         updateApiKeyVisibility();
         updateApiKeyStatus();
         showToast('已套用 ' + provider + ' 預設', 'success');
@@ -788,7 +794,9 @@
         body: JSON.stringify({
           base_url: cfgBaseUrl.value.trim(),
           model: cfgModel.value.trim(),
-          provider: cfgProvider.value
+          provider: cfgProvider.value,
+          max_tokens: parseInt(cfgMaxTokens.value) || 4096,
+          timeout: parseInt(cfgTimeout.value) || 300,
         })
       });
       if (res.ok) {

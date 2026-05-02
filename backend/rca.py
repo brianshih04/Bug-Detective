@@ -422,6 +422,7 @@ def extract_structured_log(log_text: str) -> dict:
 # =========================================================================
 async def llm_expand_keywords(
     structured: dict, bug_desc: str, api_key: str = "",
+    max_tokens: int = 0, timeout: int = 0,
 ) -> dict:
     """Step 2: Use LLM to expand keywords with semantic understanding.
 
@@ -438,13 +439,14 @@ async def llm_expand_keywords(
         base_url = OLLAMA_URL + "/v1"
         key = ""
         model = OLLAMA_MODEL
-        max_tok = 4096
-        ollama_timeout = 300  # reasoning models are slow
     else:
         base_url = llm_cfg["base_url"]
         key = api_key or llm_cfg.get("api_key", "")
         model = llm_cfg["model"]
-        max_tok = 4096
+
+    # Resolve from params or llm-config
+    _max_tok = max_tokens if max_tokens > 0 else llm_cfg.get("max_tokens", 4096)
+    _timeout = timeout if timeout > 0 else llm_cfg.get("timeout", 300)
 
     # Build context from Step 1 results (truncate to avoid overwhelming LLM)
     parts = []
@@ -487,8 +489,7 @@ async def llm_expand_keywords(
     try:
         resp = await call_llm_sync(
             base_url, key, model,
-            messages, temperature=0.1, max_tokens=max_tok,
-            timeout=ollama_timeout if llm_cfg.get("provider") == "ollama" else 90,
+            messages, temperature=0.1, max_tokens=_max_tok, timeout=_timeout,
         )
         # Handle reasoning models that put answer in reasoning field
         if not resp.strip():
@@ -772,10 +773,16 @@ def _step_event(step: int, state: str, elapsed: float = None, detail: str = ""):
 
 async def full_rca_stream(
     log_text: str, bug_desc: str, api_key: str = "", top_k: int = 15,
+    max_tokens: int = 0, timeout: int = 0,
 ) -> AsyncGenerator[str, None]:
     """Full 5-step RCA pipeline with streaming output."""
     t0 = time.time()
     step_start = t0
+
+    # Resolve max_tokens / timeout from llm-config if not explicitly provided
+    llm_cfg = load_llm_config()
+    _max_tokens = max_tokens if max_tokens > 0 else llm_cfg.get("max_tokens", 4096)
+    _timeout = timeout if timeout > 0 else llm_cfg.get("timeout", 300)
 
     # ── Step 0: Rule-based log deduplication ──────────────────────
     yield _step_event(0, "active", elapsed=0)
@@ -849,7 +856,7 @@ async def full_rca_stream(
         "text": "🧠 Step 2/5: 語意擴充（同義詞、相關模組）...",
     }) + "\n"
 
-    expanded = await llm_expand_keywords(structured, bug_desc, api_key)
+    expanded = await llm_expand_keywords(structured, bug_desc, api_key, max_tokens=_max_tokens, timeout=_timeout)
 
     now = time.time()
     yield _step_event(2, "done", elapsed=now - step_start,
@@ -955,12 +962,11 @@ async def full_rca_stream(
     messages = [{"role": "user", "content": prompt}]
 
     try:
-        step4_timeout = 600 if llm_cfg.get("provider") == "ollama" else 180
         async for chunk in call_llm_stream(
             llm_cfg["base_url"],
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
-            messages, temperature=0.3, max_tokens=4096, timeout=step4_timeout,
+            messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
         ):
             yield chunk
     except Exception as e:

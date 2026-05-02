@@ -258,6 +258,14 @@
           <div class="model-list" id="modelList" role="listbox" aria-label="可用模型"></div>
         </div>
       </div>
+      <div class="form-group">
+        <label for="cfgMaxTokens">Max Tokens <span style="font-weight:normal;color:var(--text-muted);font-size:12px;">（LLM 最大輸出 token 數）</span></label>
+        <input type="number" id="cfgMaxTokens" min="256" max="131072" step="256" placeholder="4096">
+      </div>
+      <div class="form-group">
+        <label for="cfgTimeout">Timeout（秒）<span style="font-weight:normal;color:var(--text-muted);font-size:12px;">（LLM 呼叫超時時間）</span></label>
+        <input type="number" id="cfgTimeout" min="10" max="3600" step="10" placeholder="300">
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" id="btnCancelSettings">取消</button>
