@@ -1,8 +1,9 @@
 """Configuration for bug-detective RAG system."""
-import os
 import json
+import os
 import time as _time
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")

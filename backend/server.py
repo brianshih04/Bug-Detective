@@ -1,29 +1,34 @@
 """Bug-Detective FastAPI Server with LlamaIndex RAG."""
-import json
-import os
 import subprocess
+import sys
 import time
 from collections import defaultdict
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from pydantic import BaseModel, field_validator
 from qdrant_client import QdrantClient
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.config import (
-    PORT, QDRANT_URL, COLLECTION_NAME,
-    OLLAMA_URL, load_llm_config, save_llm_config, LLM_PRESETS, DATA_DIR, PUBLIC_DIR,
+    COLLECTION_NAME,
+    LLM_PRESETS,
+    OLLAMA_URL,
+    PORT,
+    PUBLIC_DIR,
+    QDRANT_URL,
+    load_llm_config,
+    save_llm_config,
 )
-from backend.rca import hybrid_search, simple_keyword_search, full_rca_stream, close_shared_clients
+from backend.rca import close_shared_clients, full_rca_stream, simple_keyword_search
 from backend.security import sanitize_for_cloud
+
 
 # --- Pydantic models ---
 class AnalyzeRequest(BaseModel):
@@ -190,7 +195,11 @@ async def analyze(req: AnalyzeRequest, request: Request):
     if not _check_rate_limit(client_ip, _RATE_ANALYZE_WINDOW, _RATE_MAX_ANALYZE):
         raise HTTPException(429, f"Rate limit: max {_RATE_MAX_ANALYZE} analyze requests per {_RATE_ANALYZE_WINDOW}s")
     async def event_stream() -> AsyncGenerator[str, None]:
-        async for chunk in full_rca_stream(req.log_text, req.bug_description, req.api_key, top_k=req.top_k, batch_size=req.batch_size, max_tokens=req.max_tokens, timeout=req.timeout):
+        async for chunk in full_rca_stream(
+            req.log_text, req.bug_description, req.api_key,
+            top_k=req.top_k, batch_size=req.batch_size,
+            max_tokens=req.max_tokens, timeout=req.timeout,
+        ):
             yield chunk
 
     return StreamingResponse(

@@ -1,10 +1,10 @@
 """Tests for backend/config.py — load/save LLM config, defaults, presets."""
 import json
-import pytest
 from unittest.mock import patch
-from pathlib import Path
 
-import config
+import pytest
+
+import backend.config as config
 
 
 @pytest.fixture(autouse=True)
@@ -67,7 +67,6 @@ class TestLoadLlmConfig:
 
     def test_ttl_cache(self, tmp_path):
         """load_llm_config should return cached result within TTL."""
-        import time as _t
         cfg_path = tmp_path / "llm-config.json"
         cfg_path.write_text(json.dumps({"model": "cached-model"}))
 
@@ -97,7 +96,7 @@ class TestSaveLlmConfig:
         cfg_path = tmp_path / "subdir" / "llm-config.json"
 
         with patch.object(config, "LLM_CONFIG_PATH", cfg_path):
-            result = config.save_llm_config({"model": "test-model"})
+            config.save_llm_config({"model": "test-model"})
             assert cfg_path.exists()
             saved = json.loads(cfg_path.read_text())
             assert saved["model"] == "test-model"

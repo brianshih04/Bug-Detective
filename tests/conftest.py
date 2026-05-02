@@ -1,12 +1,12 @@
 """Shared fixtures for bug-detective tests."""
 import sys
-from pathlib import Path
 import unittest.mock
+from pathlib import Path
 
-# Ensure backend package is importable
-backend_dir = str(Path(__file__).parent.parent / "backend")
-if backend_dir not in sys.path:
-    sys.path.insert(0, backend_dir)
+# Ensure project root is importable (for `from backend.X import Y`)
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # Mock heavy/optional dependencies BEFORE backend imports.
 # MagicMock auto-creates any attribute, so `from X import Y` always works.

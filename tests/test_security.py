@@ -1,6 +1,5 @@
 """Tests for backend/security.py — sanitize_for_cloud()."""
-import pytest
-from security import sanitize_for_cloud
+from backend.security import sanitize_for_cloud
 
 
 class TestSanitizeForCloud:
@@ -34,7 +33,9 @@ class TestSanitizeForCloud:
         assert "REDACTED" not in sanitize_for_cloud("api_key=abc")
 
     def test_bearer_token(self):
-        assert sanitize_for_cloud("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc") == "Authorization: Bearer ***REDACTED***"
+        assert sanitize_for_cloud(
+            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc"
+        ) == "Authorization: Bearer ***REDACTED***"
 
     def test_basic_token(self):
         assert sanitize_for_cloud("Authorization: Basic dXNlcjpwYXNz") == "Authorization: Basic ***REDACTED***"

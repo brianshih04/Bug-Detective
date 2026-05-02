@@ -4,9 +4,8 @@ This file contains the JS renderMarkdown function extracted for testing.
 We evaluate it via a minimal JS runtime approach: extract the function
 and test with known XSS payloads.
 """
-import subprocess
 import json
-import pytest
+import subprocess
 
 # Extracted renderMarkdown + escapeHtml from app.js for testing
 RENDER_MD_JS = """

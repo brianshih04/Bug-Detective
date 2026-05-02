@@ -9,24 +9,28 @@ import asyncio
 import json
 import math
 import re
+import sys
 import time
 from collections import Counter, defaultdict
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 
 import httpx
-from llama_index.core import VectorStoreIndex, QueryBundle
-from llama_index.core.retrievers import VectorIndexRetriever
+from llama_index.core import QueryBundle, VectorStoreIndex
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.config import (
-    QDRANT_URL, COLLECTION_NAME, EMBEDDING_MODEL, EMBEDDING_DIM,
-    OLLAMA_URL, OLLAMA_MODEL, GLM5_BASE_URL, GLM5_API_KEY, GLM5_MODEL,
-    SOURCE_DIR, load_llm_config,
+    COLLECTION_NAME,
+    EMBEDDING_DIM,
+    EMBEDDING_MODEL,
+    OLLAMA_MODEL,
+    OLLAMA_URL,
+    QDRANT_URL,
+    SOURCE_DIR,
+    load_llm_config,
 )
 from backend.security import sanitize_for_cloud
 
@@ -94,7 +98,8 @@ async def call_llm_stream(
         ) as resp:
             if resp.status_code != 200:
                 body = await resp.aread()
-                yield json.dumps({"type": "error", "text": f"LLM API 回應 HTTP {resp.status_code}: {body.decode(errors='replace')[:500]}"}) + "\n"
+                error_msg = f"LLM API 回應 HTTP {resp.status_code}: {body.decode(errors='replace')[:500]}"
+                yield json.dumps({"type": "error", "text": error_msg}) + "\n"
                 return
             token_count = 0
             async for line in resp.aiter_lines():
@@ -103,7 +108,8 @@ async def call_llm_stream(
                 data = line[6:]
                 if data.strip() == "[DONE]":
                     if token_count > 0:
-                        yield json.dumps({"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}) + "\n"
+                        usage = {"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}
+                        yield json.dumps(usage) + "\n"
                     break
                 try:
                     chunk = json.loads(data)
@@ -344,13 +350,13 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
         after_filter.append((i, line))
 
     # ── Layer 2: Fingerprint sampling ──
-    n_filtered = len(after_filter)
+    _n_filtered = len(after_filter)
     fingerprints = [_fingerprint(line) for _, line in after_filter]
 
     # Count fingerprint frequencies
     fp_count = Counter()
     fp_groups = defaultdict(list)  # fp → list of indices in after_filter
-    for idx, (_, line) in enumerate(after_filter):
+    for idx, (_, _) in enumerate(after_filter):
         fp = fingerprints[idx].strip()
         if fp:
             fp_count[fp] += 1
@@ -421,7 +427,7 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
         if fp and fp in first_sample and idx == first_sample[fp]:
             annotation = f"  ← 此模式共 {fp_count[fp]} 次（保留代表性取樣）"
         elif fp and fp in last_sample and idx == last_sample[fp]:
-            annotation = f"  ← 此模式到此結束"
+            annotation = "  ← 此模式到此結束"
         output.append(line + annotation)
 
     # Build summary header
@@ -567,7 +573,7 @@ async def llm_expand_keywords(
     if structured["exceptions"]:
         parts.append(f"Exceptions: {', '.join(structured['exceptions'][:15])}")
     if structured["error_lines"]:
-        parts.append(f"Error lines:\n" + "\n".join(structured["error_lines"][:15]))
+        parts.append("Error lines:\n" + "\n".join(structured["error_lines"][:15]))
 
     extracted_context = "\n".join(parts)
 

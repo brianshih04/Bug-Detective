@@ -1,13 +1,13 @@
 """Tests for backend/server.py — API endpoints, security headers, API key handling."""
+from unittest.mock import patch
+
 import pytest
-import re
-from unittest.mock import patch, MagicMock
-from pathlib import Path
+from fastapi.testclient import TestClient
+
+from backend.config import _LLM_CONFIG_CACHE
 
 # Server imports (needs backend on path)
-from server import app
-from fastapi.testclient import TestClient
-from backend.config import _LLM_CONFIG_CACHE
+from backend.server import app
 
 
 @pytest.fixture(autouse=True)
@@ -158,7 +158,7 @@ class TestRateLimiting:
     @pytest.fixture(autouse=True)
     def _reset_rate_limits(self):
         """Clear rate limit state between tests."""
-        from server import _RATE_LIMITS
+        from backend.server import _RATE_LIMITS
         _RATE_LIMITS.clear()
         yield
 

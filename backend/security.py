@@ -4,7 +4,10 @@ import re
 # Patterns to redact
 PATTERNS = [
     # API keys
-    (re.compile(r'(api[_-]?key|apikey|secret|token|password|passwd|pwd)\s*[=:]\s*["\']?([^\s"\'&,\}]{8,})["\']?', re.IGNORECASE), r'\1=***REDACTED***'),
+    (re.compile(
+        r'(api[_-]?key|apikey|secret|token|password|passwd|pwd)\s*[=:]\s*["\']?([^\s"\'&,}]{8,})["\']?',
+        re.IGNORECASE,
+    ), r'\1=***REDACTED***'),
     # Bearer tokens
     (re.compile(r'(Bearer|Basic|Token)\s+[A-Za-z0-9\-._~+/]+=*', re.IGNORECASE), r'\1 ***REDACTED***'),
     # Internal IPs
