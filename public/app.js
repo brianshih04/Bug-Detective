@@ -55,6 +55,7 @@
   let analysisRawText = '';
   let pipelineStartTime = 0;
   let pipelineTimerInterval = null;
+  let _contentScrollRaf = null;
 
   const MAX_TOASTS = 5;
 
@@ -369,9 +370,11 @@
     analysisCard.classList.remove('hidden');
     analysisCard.classList.add('fade-in');
     analysisRawText = '';
+    _contentScrollRaf = null;
     analysisSplit.classList.add('thinking-only');
     thinkingPanel.classList.add('hidden');
     thinkingPanelBody.textContent = '';
+    thinkingPanelBody._thinkNode = null;
     thinkingSpinner.style.display = 'none';
     placeholderCard.classList.add('hidden');
 
@@ -619,7 +622,13 @@
         analysisSplit.classList.remove('thinking-only');
         thinkingPanel.classList.remove('hidden');
         thinkingSpinner.style.display = '';
-        thinkingPanelBody.textContent += evt.text || '';
+        // Append incrementally instead of replacing
+        if (!thinkingPanelBody._thinkNode) {
+          thinkingPanelBody._thinkNode = document.createTextNode(evt.text || '');
+          thinkingPanelBody.appendChild(thinkingPanelBody._thinkNode);
+        } else {
+          thinkingPanelBody._thinkNode.textContent += (evt.text || '');
+        }
         thinkingPanelBody.scrollTop = thinkingPanelBody.scrollHeight;
         break;
       case 'content':
@@ -628,19 +637,32 @@
           analysisContent.innerHTML = '';
         }
         analysisRawText += (evt.text || '');
-        // During streaming: show raw text via textContent (O(1) per chunk, no markdown parsing)
+        // During streaming: append text incrementally (O(1) per chunk)
         if (!analysisContent.querySelector('.stream-raw-text')) {
           analysisContent.innerHTML = '';
           var pre = document.createElement('pre');
           pre.className = 'stream-raw-text';
           pre.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;font-family:inherit;line-height:1.7;margin:0;padding:1rem;color:inherit;background:transparent;';
           analysisContent.appendChild(pre);
+          pre._streamNode = null; // will hold a persistent text node
         }
-        analysisContent.querySelector('.stream-raw-text').textContent = analysisRawText;
+        var rawPre = analysisContent.querySelector('.stream-raw-text');
+        // Append to existing text node (avoid replacing entire textContent)
+        if (!rawPre._streamNode) {
+          rawPre._streamNode = document.createTextNode(evt.text || '');
+          rawPre.appendChild(rawPre._streamNode);
+        } else {
+          rawPre._streamNode.textContent += (evt.text || '');
+        }
         analysisContent.classList.add('streaming-cursor');
-        // Auto-scroll analysis
-        var panel = analysisContent.closest('.result-panel');
-        if (panel) panel.scrollTop = panel.scrollHeight;
+        // Throttle auto-scroll via rAF
+        if (!_contentScrollRaf) {
+          _contentScrollRaf = requestAnimationFrame(function() {
+            var panel = analysisContent.closest('.result-panel');
+            if (panel) panel.scrollTop = panel.scrollHeight;
+            _contentScrollRaf = null;
+          });
+        }
         break;
       case 'done':
         setPipelineStep(4, 'done');
