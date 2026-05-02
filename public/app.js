@@ -377,7 +377,9 @@
       localStorage.setItem('bugDetective_theme', activeTheme);
 
       if (!res.ok) {
-        throw new Error('HTTP ' + res.status);
+        var errBody = '';
+        try { errBody = await res.text(); } catch(e) {}
+        throw new Error('HTTP ' + res.status + (errBody ? ': ' + errBody.slice(0, 200) : ''));
       }
 
       var reader = res.body.getReader();
