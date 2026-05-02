@@ -1648,6 +1648,7 @@ async def _step4_deep_analysis(
     api_key: str,
     llm_cfg: dict,
     batch_size: int,
+    temperature: float,
     _max_tokens: int,
     _timeout: int,
 ) -> AsyncGenerator[str, None]:
@@ -1679,7 +1680,7 @@ async def _step4_deep_analysis(
                 api_key or llm_cfg.get("api_key", ""),
                 llm_cfg["model"],
                 [{"role": "user", "content": prompt_str}],
-                temperature=0.3,
+                temperature=temperature,
                 max_tokens=min(_max_tokens, 4096),
                 timeout=_sync_timeout,
             ):
@@ -1762,7 +1763,7 @@ async def _step4_deep_analysis(
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
             messages,
-            temperature=0.3,
+            temperature=temperature,
             max_tokens=_max_tokens,
             timeout=_timeout,
         ):
@@ -1816,7 +1817,7 @@ async def _step4_deep_analysis(
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
             messages,
-            temperature=0.3,
+            temperature=temperature,
             max_tokens=_max_tokens,
             timeout=_timeout,
         ):
@@ -1830,6 +1831,7 @@ async def full_rca_stream(
     top_k: int = DEFAULT_TOP_K,
     batch_size: int = DEFAULT_BATCH_SIZE,
     keyword_limit: int = 50,
+    temperature: float = 0.3,
     max_tokens: int = 0,
     timeout: int = 0,
 ) -> AsyncGenerator[str, None]:
@@ -2070,6 +2072,7 @@ async def full_rca_stream(
             api_key=api_key,
             llm_cfg=llm_cfg,
             batch_size=batch_size,
+            temperature=temperature,
             _max_tokens=_max_tokens,
             _timeout=_timeout,
         ):

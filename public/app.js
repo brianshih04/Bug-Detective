@@ -231,6 +231,15 @@
     if (klLabel) { klLabel.textContent = savedKeywordLimit; }
   }
 
+  // Restore temperature from localStorage
+  var savedTemperature = localStorage.getItem('bugDetective_temperature');
+  if (savedTemperature) {
+    var tempSlider = $('cfgTemperature');
+    if (tempSlider) { tempSlider.value = savedTemperature; }
+    var tempLabel = $('temperatureValue');
+    if (tempLabel) { tempLabel.textContent = savedTemperature; }
+  }
+
   // Restore theme from localStorage
   var savedTheme = localStorage.getItem('bugDetective_theme') || 'light';
   document.documentElement.setAttribute('data-theme', savedTheme);
@@ -267,6 +276,15 @@
     keywordLimitSlider.addEventListener('input', function() {
       var klLabel = $('keywordLimitValue');
       if (klLabel) { klLabel.textContent = this.value; }
+    });
+  }
+
+  // Temperature slider live preview
+  var temperatureSlider = $('cfgTemperature');
+  if (temperatureSlider) {
+    temperatureSlider.addEventListener('input', function() {
+      var tempLabel = $('temperatureValue');
+      if (tempLabel) { tempLabel.textContent = this.value; }
     });
   }
 
@@ -387,7 +405,7 @@
       var res = await fetch(API + '/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 100, batch_size: parseInt($('batchSizeSelect').value) || 20, keyword_limit: parseInt($('cfgKeywordLimit').value) || 50, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
+        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 100, batch_size: parseInt($('batchSizeSelect').value) || 20, keyword_limit: parseInt($('cfgKeywordLimit').value) || 50, temperature: parseFloat($('cfgTemperature').value) || 0.3, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
         signal: currentController.signal
       });
 
@@ -395,6 +413,7 @@
       localStorage.setItem('bugDetective_batchSize', $('batchSizeSelect').value);
       localStorage.setItem('bugDetective_fontSize', $('cfgFontSize').value);
       localStorage.setItem('bugDetective_keywordLimit', $('cfgKeywordLimit').value);
+      localStorage.setItem('bugDetective_temperature', $('cfgTemperature').value);
       var activeTheme = document.documentElement.getAttribute('data-theme') || 'dark';
       localStorage.setItem('bugDetective_theme', activeTheme);
 
