@@ -30,6 +30,16 @@ from backend.config import (
 )
 from backend.security import sanitize_for_cloud
 
+# ---------------------------------------------------------------------------
+# Tuning constants
+# ---------------------------------------------------------------------------
+DEFAULT_TOP_K = 15          # vector & hybrid search results
+KEYWORD_SEARCH_LIMIT = 20   # max keywords per search
+VECTOR_SEARCH_TIMEOUT = 30  # seconds
+RRF_K = 60                  # Reciprocal Rank Fusion constant
+DEFAULT_BATCH_SIZE = 20     # Step 4 batch size
+PER_BATCH_TIMEOUT_CAP = 300 # 5 min cap per-batch in Step 4
+
 
 # ---------------------------------------------------------------------------
 # LLM call helpers
@@ -635,7 +645,7 @@ async def llm_expand_keywords(
 # =========================================================================
 # STEP 3: Hybrid Search (Keyword grep + Qdrant vector → RRF fusion)
 # =========================================================================
-async def vector_search(query: str, top_k: int = 15) -> list[dict]:
+async def vector_search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
     """Search code using Qdrant vector similarity."""
     try:
         retriever = get_retriever(similarity_top_k=top_k)
@@ -643,7 +653,7 @@ async def vector_search(query: str, top_k: int = 15) -> list[dict]:
         loop = asyncio.get_running_loop()
         nodes = await asyncio.wait_for(
             loop.run_in_executor(None, retriever.retrieve, query_bundle),
-            timeout=30,
+            timeout=VECTOR_SEARCH_TIMEOUT,
         )
 
         results = []
@@ -664,7 +674,7 @@ async def vector_search(query: str, top_k: int = 15) -> list[dict]:
 
 
 async def keyword_search(
-    keywords: list[str], source_dir: str = SOURCE_DIR, max_results: int = 15,
+    keywords: list[str], source_dir: str = SOURCE_DIR, max_results: int = DEFAULT_TOP_K,
 ) -> list[dict]:
     """Search source code using inverted index (built once at startup)."""
     results = []
@@ -677,7 +687,7 @@ async def keyword_search(
 
     kw_index = get_keyword_index()
 
-    for kw in keywords[:20]:  # limit to 20 keywords
+    for kw in keywords[:KEYWORD_SEARCH_LIMIT]:
         try:
             # Tokenize keyword and look up each token in the index
             kw_tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", kw)
@@ -752,10 +762,18 @@ async def keyword_search(
     return results
 
 
+async def simple_keyword_search(query: str, top_k: int = 10) -> list[dict]:
+    """Lightweight keyword-only search for /api/search (no LLM key needed)."""
+    keywords = query.strip().split()
+    if not keywords:
+        return []
+    return await keyword_search(keywords[:KEYWORD_SEARCH_LIMIT], max_results=top_k)
+
+
 def rrf_fuse(
     vector_results: list[dict],
     keyword_results: list[dict],
-    k: int = 60,
+    k: int = RRF_K,
 ) -> list[dict]:
     """Reciprocal Rank Fusion: merge vector + keyword search results."""
     scores = defaultdict(float)
@@ -792,7 +810,7 @@ async def hybrid_search(
     exact_keywords: list[str],
     semantic_keywords: list[str],
     summary: str,
-    top_k: int = 15,
+    top_k: int = DEFAULT_TOP_K,
 ) -> list[dict]:
     """Step 3: Hybrid search — keyword grep + vector search, fused with RRF."""
     # Run both searches in parallel
@@ -930,7 +948,7 @@ async def _step4_deep_analysis(
         # periodic heartbeat comments to keep the connection alive.
         total_batches = math.ceil(total_results / batch_size)
         batch_reports = []
-        _sync_timeout = min(_timeout, 300)  # per-batch timeout cap at 5 min
+        _sync_timeout = min(_timeout, PER_BATCH_TIMEOUT_CAP)
 
         async def _batch_stream(prompt_str, label):
             """Stream batch analysis: forward thinking to frontend, collect content silently."""
@@ -1059,8 +1077,8 @@ async def _step4_deep_analysis(
 
 
 async def full_rca_stream(
-    log_text: str, bug_desc: str, api_key: str = "", top_k: int = 15,
-    batch_size: int = 20, max_tokens: int = 0, timeout: int = 0,
+    log_text: str, bug_desc: str, api_key: str = "", top_k: int = DEFAULT_TOP_K,
+    batch_size: int = DEFAULT_BATCH_SIZE, max_tokens: int = 0, timeout: int = 0,
 ) -> AsyncGenerator[str, None]:
     """Full 5-step RCA pipeline with streaming output."""
     t0 = time.time()

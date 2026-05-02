@@ -173,3 +173,41 @@ class TestRateLimiting:
         # 6th should be rate limited
         res = client.post("/api/analyze", json=payload)
         assert res.status_code == 429
+
+
+class TestSearchEndpoint:
+    """Test /api/search uses simple_keyword_search (no LLM key required)."""
+
+    @patch("backend.rca.keyword_search")
+    def test_search_calls_simple_keyword_search(self, mock_kw):
+        """POST /api/search should return keyword results without API key."""
+        mock_kw.return_value = [
+            {"file": "main.c", "line": 42, "text": "error here", "score": 1.0, "source": "keyword"}
+        ]
+        res = client.post("/api/search", json={"query": "segfault crash", "top_k": 5})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["query"] == "segfault crash"
+        assert data["count"] == 1
+        assert data["results"][0]["file"] == "main.c"
+        mock_kw.assert_called_once()
+        # Verify keywords were split from query
+        call_args = mock_kw.call_args
+        assert "crash" in call_args[0][0]  # keywords list
+
+    @patch("backend.rca.keyword_search")
+    def test_search_empty_query(self, mock_kw):
+        """Empty query should return empty results."""
+        res = client.post("/api/search", json={"query": "   "})
+        assert res.status_code == 200
+        assert res.json()["count"] == 0
+        mock_kw.assert_not_called()
+
+    @patch("backend.rca.keyword_search")
+    def test_search_default_top_k(self, mock_kw):
+        """Default top_k should be 10."""
+        mock_kw.return_value = []
+        res = client.post("/api/search", json={"query": "test"})
+        assert res.status_code == 200
+        call_args = mock_kw.call_args
+        assert call_args[1]["max_results"] == 10

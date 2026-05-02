@@ -22,7 +22,7 @@ from backend.config import (
     PORT, QDRANT_URL, COLLECTION_NAME,
     OLLAMA_URL, load_llm_config, save_llm_config, LLM_PRESETS, DATA_DIR, PUBLIC_DIR,
 )
-from backend.rca import hybrid_search, full_rca_stream, close_shared_clients
+from backend.rca import hybrid_search, simple_keyword_search, full_rca_stream, close_shared_clients
 from backend.security import sanitize_for_cloud
 
 # --- Pydantic models ---
@@ -180,7 +180,7 @@ async def repos_status(request: Request):
 
 @app.post("/api/search")
 async def search(req: SearchRequest):
-    results = await hybrid_search(req.query, top_k=req.top_k)
+    results = await simple_keyword_search(req.query, top_k=req.top_k)
     return {"query": req.query, "results": results, "count": len(results)}
 
 @app.post("/api/analyze")

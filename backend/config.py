@@ -23,8 +23,7 @@ OLLAMA_MODEL = _env("OLLAMA_MODEL", "qwen3.6:35b-a3b-200k")
 
 # GLM-5 Cloud
 GLM5_BASE_URL = _env("GLM5_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
-_gk = "GLM5_API_KEY"
-GLM5_API_KEY = _env(_gk)
+GLM5_API_KEY = _env("GLM5_API_KEY")
 GLM5_MODEL = _env("GLM5_MODEL", "glm-5-turbo")
 
 # --- Server ---
@@ -68,8 +67,9 @@ def load_llm_config() -> dict:
             cache["data"] = cfg
             cache["mtime"] = _time.monotonic()
             return cfg
-        except Exception:
-            pass
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            import logging
+            logging.getLogger(__name__).warning("Failed to load %s: %s", LLM_CONFIG_PATH, e)
     result = dict(DEFAULT_LLM_CONFIG)
     cache["data"] = result
     cache["mtime"] = _time.monotonic()
