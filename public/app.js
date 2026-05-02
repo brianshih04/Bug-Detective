@@ -650,6 +650,15 @@
         }
         thinkingPanelBody.scrollTop = thinkingPanelBody.scrollHeight;
         break;
+      case 'clear_thinking':
+        // Phase B start: clear Phase A thinking, reset thinking node
+        thinkingPanelBody._thinkNode = null;
+        thinkingPanelBody._contentNode = null;
+        thinkingPanelBody.innerHTML = '';
+        thinkingSpinner.style.display = '';
+        thinkingPanel.classList.remove('hidden');
+        analysisSplit.classList.remove('thinking-only');
+        break;
       case 'content':
         // Clear skeleton on first content
         if (analysisRawText === '' && analysisContent.querySelector('.skeleton')) {
@@ -674,6 +683,17 @@
           rawPre._streamNode.textContent += (evt.text || '');
         }
         analysisContent.classList.add('streaming-cursor');
+        // Also append raw content to thinking panel as live preview (serves as keepalive)
+        if (!thinkingPanelBody._contentNode) {
+          var contentPreview = document.createElement('div');
+          contentPreview.style.cssText = 'border-top:1px solid var(--border);margin-top:8px;padding-top:8px;white-space:pre-wrap;word-wrap:break-word;font-size:0.95em;opacity:0.8;';
+          thinkingPanelBody.appendChild(contentPreview);
+          thinkingPanelBody._contentNode = document.createTextNode(evt.text || '');
+          contentPreview.appendChild(thinkingPanelBody._contentNode);
+        } else {
+          thinkingPanelBody._contentNode.textContent += (evt.text || '');
+        }
+        thinkingPanelBody.scrollTop = thinkingPanelBody.scrollHeight;
         // Throttle auto-scroll via rAF
         if (!_contentScrollRaf) {
           _contentScrollRaf = requestAnimationFrame(function() {

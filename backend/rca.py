@@ -1738,6 +1738,7 @@ async def _step4_deep_analysis(
         all_batch_text = "\n\n---\n\n".join(batch_reports)
         synthesis_context = sanitize_for_cloud(all_batch_text)
 
+        yield json.dumps({"type": "clear_thinking"}) + "\n"
         yield (
             json.dumps(
                 {
