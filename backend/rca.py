@@ -7,6 +7,7 @@ Step 4: Cloud LLM deep analysis (GLM-5 / OpenRouter / MiniMax)
 """
 import asyncio
 import json
+import math
 import re
 import time
 from collections import Counter, defaultdict
@@ -838,6 +839,225 @@ def _step_event(step: int, state: str, elapsed: float = None, detail: str = "",
     return json.dumps(evt) + "\n"
 
 
+def _build_context(batch: list[dict]) -> str:
+    """Build formatted context string from a batch of search results."""
+    parts = []
+    for i, r in enumerate(batch, 1):
+        parts.append(
+            f"### Result {i}: {r['file_path']} (RRF: {r.get('rrf_score', 'N/A')})\n"
+            f"```{r.get('language', 'c')}\n{r['text']}\n```"
+        )
+    return "\n\n".join(parts)
+
+
+_BATCH_ANALYSIS_PROMPT = """你是 Avision 軟體部門的資深 RCA 工程師。
+
+## Bug 描述
+{desc}
+
+## 問題摘要
+{summary}
+
+## Regex 萃取的精確關鍵字
+{exact}
+
+## 語意擴充關鍵字
+{semantic}
+
+## 相關程式碼片段（第 {batch_idx}/{total_batches} 批，RRF 融合排序）
+{context}
+
+## 任務
+請針對以上程式碼片段分析，找出：
+1. **可能的根本原因**：解釋這段程式碼與 Bug 的關聯
+2. **受影響檔案與行號**：列出需要修改的具體位置
+3. **修復建議**：提供具體的程式碼修改建議
+
+用繁體中文回覆，程式碼用 markdown code block。保持簡潔聚焦，不要重述 Bug 描述。"""
+
+_SYNTHESIS_PROMPT = """你是 Avision 軟體部門的資深 RCA 工程師，負責統整多批程式碼分析結果。
+
+## Bug 描述
+{desc}
+
+## 問題摘要
+{summary}
+
+## Regex 萃取的精確關鍵字
+{exact}
+
+## 語意擴充關鍵字
+{semantic}
+
+## 分批分析結果（共 {total_batches} 批）
+{batch_results}
+
+## 任務
+請統整以上所有批次的分析結果，產出完整的 Root Cause Analysis 報告：
+1. **根本原因**：綜合所有證據，說明為什麼會出現這個 Bug
+2. **受影響檔案與行號**：列出所有需要修改的具體位置（去重合併）
+3. **修復建議**：提供具體的程式碼修改建議（按優先級排序）
+4. **驗證方法**：如何確認修復有效
+
+用繁體中文回覆，程式碼用 markdown code block。如果不同批次有矛盾的分析，以 RRF 分數較高的批次為準。"""
+
+
+async def _step4_deep_analysis(
+    results_to_analyze: list[dict],
+    expanded: dict,
+    bug_desc: str,
+    api_key: str,
+    llm_cfg: dict,
+    batch_size: int,
+    _max_tokens: int,
+    _timeout: int,
+) -> AsyncGenerator[str, None]:
+    """Step 4: Cloud LLM deep analysis — batched or single-call.
+
+    Yields SSE event strings (JSON + newline), same as full_rca_stream.
+    """
+    total_results = len(results_to_analyze)
+
+    safe_summary = sanitize_for_cloud(expanded["summary"])
+    safe_desc = sanitize_for_cloud(bug_desc)
+    safe_exact = json.dumps(expanded['exact'], ensure_ascii=False)
+    safe_semantic = json.dumps(expanded['semantic'], ensure_ascii=False)
+
+    if batch_size > 0 and total_results > batch_size:
+        # ── Phase A: Batch analysis (sync, no streaming to frontend) ──
+        # NOTE: call_llm_sync may take >100s per batch; Cloudflare tunnel
+        # drops idle SSE connections after ~100s, so we wrap each call with
+        # periodic heartbeat comments to keep the connection alive.
+        total_batches = math.ceil(total_results / batch_size)
+        batch_reports = []
+        _sync_timeout = min(_timeout, 300)  # per-batch timeout cap at 5 min
+
+        async def _batch_stream(prompt_str, label):
+            """Stream batch analysis: forward thinking to frontend, collect content silently."""
+            batch_chunks = []
+            async for chunk in call_llm_stream(
+                llm_cfg["base_url"],
+                api_key or llm_cfg.get("api_key", ""),
+                llm_cfg["model"],
+                [{"role": "user", "content": prompt_str}],
+                temperature=0.3,
+                max_tokens=min(_max_tokens, 4096),
+                timeout=_sync_timeout,
+            ):
+                if chunk.startswith("{"):
+                    try:
+                        evt = json.loads(chunk)
+                        if evt.get("type") == "thinking":
+                            yield chunk  # forward thinking to frontend
+                        elif evt.get("type") == "content":
+                            batch_chunks.append(evt.get("text", ""))
+                        elif evt.get("type") == "token_usage":
+                            yield chunk  # forward token usage
+                    except json.JSONDecodeError:
+                        pass
+            # Yield collected content as internal event
+            yield json.dumps({"type": "_batch_result", "text": "".join(batch_chunks)}) + "\n"
+
+        for b_idx in range(total_batches):
+            start = b_idx * batch_size
+            batch = results_to_analyze[start:start + batch_size]
+            context = sanitize_for_cloud(_build_context(batch))
+
+            yield json.dumps({
+                "type": "status",
+                "text": f"🧩 Step 4: 分析第 {b_idx + 1}/{total_batches} 批（{len(batch)} 個檔案）...",
+            }) + "\n"
+
+            prompt = _BATCH_ANALYSIS_PROMPT.format(
+                desc=safe_desc, summary=safe_summary,
+                exact=safe_exact, semantic=safe_semantic,
+                context=context,
+                batch_idx=b_idx + 1, total_batches=total_batches,
+            )
+
+            # Stream batch: thinking goes to frontend, content collected silently
+            batch_text = ""
+            async for chunk in _batch_stream(prompt, f"batch {b_idx+1}/{total_batches}"):
+                if chunk.startswith("{") and '"_batch_result"' in chunk:
+                    batch_text = json.loads(chunk)["text"]
+                else:
+                    yield chunk  # forward thinking/token_usage to frontend
+            batch_reports.append(
+                f"### 第 {b_idx + 1} 批（{len(batch)} 個檔案，RRF #{start + 1}~#{start + len(batch)}）\n\n{batch_text}"
+            )
+
+        # ── Phase B: Synthesis (stream to frontend) ──
+        all_batch_text = "\n\n---\n\n".join(batch_reports)
+        synthesis_context = sanitize_for_cloud(all_batch_text)
+
+        yield json.dumps({
+            "type": "status",
+            "text": f"🔄 Step 4: 統整 {total_batches} 批分析結果...",
+        }) + "\n"
+
+        synthesis_prompt = _SYNTHESIS_PROMPT.format(
+            desc=safe_desc, summary=safe_summary,
+            exact=safe_exact, semantic=safe_semantic,
+            batch_results=synthesis_context,
+            total_batches=total_batches,
+        )
+        messages = [{"role": "user", "content": synthesis_prompt}]
+
+        async for chunk in call_llm_stream(
+            llm_cfg["base_url"],
+            api_key or llm_cfg.get("api_key", ""),
+            llm_cfg["model"],
+            messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
+        ):
+            yield chunk
+
+    else:
+        # ── No batching: original single-call flow ──
+        yield json.dumps({
+            "type": "status",
+            "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
+        }) + "\n"
+
+        code_context = _build_context(results_to_analyze)
+        safe_context = sanitize_for_cloud(code_context)
+
+        prompt = f"""你是 Avision 軟體部門的資深 RCA 工程師。
+
+## Bug 描述
+{safe_desc}
+
+## 問題摘要
+{safe_summary}
+
+## Regex 萃取的精確關鍵字
+{safe_exact}
+
+## 語意擴充關鍵字
+{safe_semantic}
+
+## 相關程式碼片段（RRF 融合排序）
+{safe_context}
+
+## 任務
+請進行 Root Cause Analysis：
+1. **根本原因**：為什麼會出現這個 Bug
+2. **受影響檔案與行號**：需修改的具體位置
+3. **修復建議**：具體的程式碼修改建議
+4. **驗證方法**：如何確認修復有效
+
+用繁體中文回覆，程式碼用 markdown code block。"""
+
+        messages = [{"role": "user", "content": prompt}]
+
+        async for chunk in call_llm_stream(
+            llm_cfg["base_url"],
+            api_key or llm_cfg.get("api_key", ""),
+            llm_cfg["model"],
+            messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
+        ):
+            yield chunk
+
+
 async def full_rca_stream(
     log_text: str, bug_desc: str, api_key: str = "", top_k: int = 15,
     batch_size: int = 20, max_tokens: int = 0, timeout: int = 0,
@@ -989,209 +1209,19 @@ async def full_rca_stream(
     llm_cfg = load_llm_config()
 
     results_to_analyze = fused_results[:top_k]
-    total_results = len(results_to_analyze)
-
-    # Build context parts once
-    def _build_context(batch: list[dict]) -> str:
-        parts = []
-        for i, r in enumerate(batch, 1):
-            parts.append(
-                f"### Result {i}: {r['file_path']} (RRF: {r.get('rrf_score', 'N/A')})\n"
-                f"```{r.get('language', 'c')}\n{r['text']}\n```"
-            )
-        return "\n\n".join(parts)
-
-    safe_summary = sanitize_for_cloud(expanded["summary"])
-    safe_desc = sanitize_for_cloud(bug_desc)
-    safe_exact = json.dumps(expanded['exact'], ensure_ascii=False)
-    safe_semantic = json.dumps(expanded['semantic'], ensure_ascii=False)
-
-    _batch_analysis_prompt = """你是 Avision 軟體部門的資深 RCA 工程師。
-
-## Bug 描述
-{desc}
-
-## 問題摘要
-{summary}
-
-## Regex 萃取的精確關鍵字
-{exact}
-
-## 語意擴充關鍵字
-{semantic}
-
-## 相關程式碼片段（第 {batch_idx}/{total_batches} 批，RRF 融合排序）
-{context}
-
-## 任務
-請針對以上程式碼片段分析，找出：
-1. **可能的根本原因**：解釋這段程式碼與 Bug 的關聯
-2. **受影響檔案與行號**：列出需要修改的具體位置
-3. **修復建議**：提供具體的程式碼修改建議
-
-用繁體中文回覆，程式碼用 markdown code block。保持簡潔聚焦，不要重述 Bug 描述。"""
-
-    _synthesis_prompt = """你是 Avision 軟體部門的資深 RCA 工程師，負責統整多批程式碼分析結果。
-
-## Bug 描述
-{desc}
-
-## 問題摘要
-{summary}
-
-## Regex 萃取的精確關鍵字
-{exact}
-
-## 語意擴充關鍵字
-{semantic}
-
-## 分批分析結果（共 {total_batches} 批）
-{batch_results}
-
-## 任務
-請統整以上所有批次的分析結果，產出完整的 Root Cause Analysis 報告：
-1. **根本原因**：綜合所有證據，說明為什麼會出現這個 Bug
-2. **受影響檔案與行號**：列出所有需要修改的具體位置（去重合併）
-3. **修復建議**：提供具體的程式碼修改建議（按優先級排序）
-4. **驗證方法**：如何確認修復有效
-
-用繁體中文回覆，程式碼用 markdown code block。如果不同批次有矛盾的分析，以 RRF 分數較高的批次為準。"""
 
     try:
-        if batch_size > 0 and total_results > batch_size:
-            # ── Phase A: Batch analysis (sync, no streaming to frontend) ──
-            # NOTE: call_llm_sync may take >100s per batch; Cloudflare tunnel
-            # drops idle SSE connections after ~100s, so we wrap each call with
-            # periodic heartbeat comments to keep the connection alive.
-            import math
-            total_batches = math.ceil(total_results / batch_size)
-            batch_reports = []
-            _sync_timeout = min(_timeout, 300)  # per-batch timeout cap at 5 min
-
-            async def _batch_stream(prompt_str, label):
-                """Stream batch analysis: forward thinking to frontend, collect content silently."""
-                batch_chunks = []
-                async for chunk in call_llm_stream(
-                    llm_cfg["base_url"],
-                    api_key or llm_cfg.get("api_key", ""),
-                    llm_cfg["model"],
-                    [{"role": "user", "content": prompt_str}],
-                    temperature=0.3,
-                    max_tokens=min(_max_tokens, 4096),
-                    timeout=_sync_timeout,
-                ):
-                    if chunk.startswith("{"):
-                        try:
-                            evt = json.loads(chunk)
-                            if evt.get("type") == "thinking":
-                                yield chunk  # forward thinking to frontend
-                            elif evt.get("type") == "content":
-                                batch_chunks.append(evt.get("text", ""))
-                            elif evt.get("type") == "token_usage":
-                                yield chunk  # forward token usage
-                        except json.JSONDecodeError:
-                            pass
-                # Yield collected content as internal event
-                yield json.dumps({"type": "_batch_result", "text": "".join(batch_chunks)}) + "\n"
-
-            for b_idx in range(total_batches):
-                start = b_idx * batch_size
-                batch = results_to_analyze[start:start + batch_size]
-                context = sanitize_for_cloud(_build_context(batch))
-
-                yield json.dumps({
-                    "type": "status",
-                    "text": f"🧩 Step 4: 分析第 {b_idx + 1}/{total_batches} 批（{len(batch)} 個檔案）...",
-                }) + "\n"
-
-                prompt = _batch_analysis_prompt.format(
-                    desc=safe_desc, summary=safe_summary,
-                    exact=safe_exact, semantic=safe_semantic,
-                    context=context,
-                    batch_idx=b_idx + 1, total_batches=total_batches,
-                )
-
-                # Stream batch: thinking goes to frontend, content collected silently
-                batch_text = ""
-                async for chunk in _batch_stream(prompt, f"batch {b_idx+1}/{total_batches}"):
-                    if chunk.startswith("{") and '"_batch_result"' in chunk:
-                        batch_text = json.loads(chunk)["text"]
-                    else:
-                        yield chunk  # forward thinking/token_usage to frontend
-                batch_reports.append(
-                    f"### 第 {b_idx + 1} 批（{len(batch)} 個檔案，RRF #{start + 1}~#{start + len(batch)}）\n\n{batch_text}"
-                )
-
-            # ── Phase B: Synthesis (stream to frontend) ──
-            all_batch_text = "\n\n---\n\n".join(batch_reports)
-            synthesis_context = sanitize_for_cloud(all_batch_text)
-
-            yield json.dumps({
-                "type": "status",
-                "text": f"🔄 Step 4: 統整 {total_batches} 批分析結果...",
-            }) + "\n"
-
-            synthesis_prompt = _synthesis_prompt.format(
-                desc=safe_desc, summary=safe_summary,
-                exact=safe_exact, semantic=safe_semantic,
-                batch_results=synthesis_context,
-                total_batches=total_batches,
-            )
-            messages = [{"role": "user", "content": synthesis_prompt}]
-
-            async for chunk in call_llm_stream(
-                llm_cfg["base_url"],
-                api_key or llm_cfg.get("api_key", ""),
-                llm_cfg["model"],
-                messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
-            ):
-                yield chunk
-
-        else:
-            # ── No batching: original single-call flow ──
-            yield json.dumps({
-                "type": "status",
-                "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
-            }) + "\n"
-
-            code_context = _build_context(results_to_analyze)
-            safe_context = sanitize_for_cloud(code_context)
-
-            prompt = f"""你是 Avision 軟體部門的資深 RCA 工程師。
-
-## Bug 描述
-{safe_desc}
-
-## 問題摘要
-{safe_summary}
-
-## Regex 萃取的精確關鍵字
-{safe_exact}
-
-## 語意擴充關鍵字
-{safe_semantic}
-
-## 相關程式碼片段（RRF 融合排序）
-{safe_context}
-
-## 任務
-請進行 Root Cause Analysis：
-1. **根本原因**：為什麼會出現這個 Bug
-2. **受影響檔案與行號**：需修改的具體位置
-3. **修復建議**：具體的程式碼修改建議
-4. **驗證方法**：如何確認修復有效
-
-用繁體中文回覆，程式碼用 markdown code block。"""
-
-            messages = [{"role": "user", "content": prompt}]
-
-            async for chunk in call_llm_stream(
-                llm_cfg["base_url"],
-                api_key or llm_cfg.get("api_key", ""),
-                llm_cfg["model"],
-                messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
-            ):
-                yield chunk
+        async for evt in _step4_deep_analysis(
+            results_to_analyze=results_to_analyze,
+            expanded=expanded,
+            bug_desc=bug_desc,
+            api_key=api_key,
+            llm_cfg=llm_cfg,
+            batch_size=batch_size,
+            _max_tokens=_max_tokens,
+            _timeout=_timeout,
+        ):
+            yield evt
 
     except Exception as e:
         yield json.dumps({

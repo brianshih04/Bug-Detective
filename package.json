@@ -1,17 +1,12 @@
 {
   "name": "bug-detective",
-  "version": "1.0.0",
+  "version": "2.5.0",
   "private": true,
-  "type": "module",
+  "description": "RAG-based Root Cause Analysis tool for C/C++ codebases (FastAPI + Python backend)",
   "scripts": {
-    "dev": "node server.mjs",
-    "build-index": "python3 scripts/build-index.py",
-    "start": "node --env-file=.env server.mjs"
-  },
-  "dependencies": {
-    "7zip-bin": "^5.2.0",
-    "cors": "^2.8.6",
-    "express": "^5.1.0",
-    "fflate": "^0.8.2"
+    "dev": "python3 -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 --reload",
+    "start": "python3 -m uvicorn backend.server:app --host 0.0.0.0 --port 17580",
+    "test": "python3 -m pytest tests/ -v",
+    "ingest": "python3 scripts/ingest.py"
   }
 }
