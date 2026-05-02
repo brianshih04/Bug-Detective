@@ -41,7 +41,7 @@ from backend.security import sanitize_for_cloud
 # Tuning constants
 # ---------------------------------------------------------------------------
 DEFAULT_TOP_K = 15  # vector & hybrid search results
-KEYWORD_SEARCH_LIMIT = 20  # max keywords per search
+KEYWORD_SEARCH_LIMIT = 50  # max keywords per search
 VECTOR_SEARCH_TIMEOUT = 30  # seconds
 RRF_K = 60  # Reciprocal Rank Fusion constant
 DEFAULT_BATCH_SIZE = 20  # Step 4 batch size
@@ -853,8 +853,8 @@ def _extract_keywords_from_drain(
             summary_parts.append(f"異常: {'; '.join(anomaly_descs)}")
 
     return {
-        "exact": exact_deduped[:20],
-        "semantic": sorted(semantic_set)[:20],
+        "exact": exact_deduped[:KEYWORD_SEARCH_LIMIT],
+        "semantic": sorted(semantic_set)[:KEYWORD_SEARCH_LIMIT],
         "summary": " | ".join(summary_parts)[:100],
     }
 
@@ -1079,7 +1079,7 @@ def _fallback_keywords_from_chunks(
             exact.append(kw)
     return {
         "exact": exact,
-        "semantic": all_patterns[:20],
+        "semantic": all_patterns[:KEYWORD_SEARCH_LIMIT],
         "summary": bug_desc[:100],
     }
 
@@ -1280,8 +1280,8 @@ async def _synthesize_chunk_results(chunk_results: list[dict], bug_desc: str) ->
         parsed = _parse_llm_json_response(resp)
         if parsed:
             return {
-                "exact": parsed.get("exact", [])[:20],
-                "semantic": parsed.get("semantic", [])[:20],
+                "exact": parsed.get("exact", [])[:KEYWORD_SEARCH_LIMIT],
+                "semantic": parsed.get("semantic", [])[:KEYWORD_SEARCH_LIMIT],
                 "summary": parsed.get("summary", bug_desc[:100]),
                 "usage": usage or {},
             }
@@ -1298,7 +1298,7 @@ async def _synthesize_chunk_results(chunk_results: list[dict], bug_desc: str) ->
             exact.append(kw)
     return {
         "exact": exact,
-        "semantic": all_patterns[:20],
+        "semantic": all_patterns[:KEYWORD_SEARCH_LIMIT],
         "summary": bug_desc[:100],
     }
 
