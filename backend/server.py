@@ -28,7 +28,7 @@ class AnalyzeRequest(BaseModel):
     log_text: str
     bug_description: str = ""
     api_key: str = ""  # passed from client, never persisted
-    top_k: int = 20  # number of search results for RCA
+    top_k: int = 100  # number of search results for RCA
     max_tokens: int = 0  # 0 = use server default from llm-config
     timeout: int = 0  # 0 = use server default from llm-config
 
@@ -50,14 +50,6 @@ class FetchModelsRequest(BaseModel):
 
 class SanitizeRequest(BaseModel):
     text: str = ""
-
-class AnalyzeRequest(BaseModel):
-    log_text: str
-    bug_description: str = ""
-    api_key: str = ""  # passed from client, never persisted
-    top_k: int = 20  # number of search results for RCA
-    max_tokens: int = 0  # 0 = use server default from llm-config
-    timeout: int = 0  # 0 = use server default from llm-config
 
 # --- App lifespan ---
 @asynccontextmanager

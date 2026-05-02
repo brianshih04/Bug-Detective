@@ -60,11 +60,15 @@ async def call_llm_stream(
             "POST", _chat_url(base_url), json=payload, headers=headers,
         ) as resp:
             resp.raise_for_status()
+            token_count = 0
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
                 data = line[6:]
                 if data.strip() == "[DONE]":
+                    # Emit final token count
+                    if token_count > 0:
+                        yield json.dumps({"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}) + "\n"
                     break
                 try:
                     chunk = json.loads(data)
@@ -76,8 +80,10 @@ async def call_llm_stream(
                     )
                     if reasoning:
                         yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
+                        token_count += 1
                     if content:
                         yield json.dumps({"type": "content", "text": content}) + "\n"
+                        token_count += 1
                 except json.JSONDecodeError:
                     continue
 
@@ -85,8 +91,8 @@ async def call_llm_stream(
 async def call_llm_sync(
     base_url: str, api_key: str, model: str, messages: list[dict],
     temperature: float = 0.3, max_tokens: int = 4096, timeout: float = 120,
-) -> str:
-    """Non-streaming LLM call, returns full response text."""
+) -> tuple[str, dict]:
+    """Non-streaming LLM call. Returns (response_text, usage_dict)."""
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -99,11 +105,14 @@ async def call_llm_sync(
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(_chat_url(base_url), json=payload, headers=headers)
         resp.raise_for_status()
-        msg = resp.json()["choices"][0]["message"]
+        data = resp.json()
+        msg = data["choices"][0]["message"]
         # Ollama reasoning models put thinking in reasoning_content, answer in content
         content = msg.get("content", "") or ""
         reasoning = msg.get("reasoning_content", "") or ""
-        return content.strip() or reasoning.strip() or ""
+        text = content.strip() or reasoning.strip() or ""
+        usage = data.get("usage", {})
+        return text, usage
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +496,7 @@ async def llm_expand_keywords(
     messages = [{"role": "user", "content": prompt}]
 
     try:
-        resp = await call_llm_sync(
+        resp, usage = await call_llm_sync(
             base_url, key, model,
             messages, temperature=0.1, max_tokens=_max_tok, timeout=_timeout,
         )
@@ -514,6 +523,7 @@ async def llm_expand_keywords(
             "exact": expanded.get("exact", []),
             "semantic": expanded.get("semantic", []),
             "structured": structured,
+            "usage": usage or {},
         }
     except Exception as e:
         # Fallback: use regex results directly
@@ -748,12 +758,13 @@ async def deep_analysis(
     messages = [{"role": "user", "content": prompt}]
 
     try:
-        return await call_llm_sync(
+        text, _usage = await call_llm_sync(
             llm_cfg["base_url"],
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
             messages, temperature=0.3, max_tokens=4096, timeout=180,
         )
+        return text
     except Exception as e:
         return f"⚠️ 深度分析失敗: {e}"
 
@@ -761,13 +772,18 @@ async def deep_analysis(
 # =========================================================================
 # Full Pipeline (streaming)
 # =========================================================================
-def _step_event(step: int, state: str, elapsed: float = None, detail: str = ""):
+def _step_event(step: int, state: str, elapsed: float = None, detail: str = "",
+                max_tokens: int = None, timeout: int = None):
     """Emit an explicit pipeline_step SSE event for the frontend."""
     evt = {"type": "pipeline_step", "step": step, "state": state}
     if elapsed is not None:
         evt["elapsed"] = round(elapsed, 1)
     if detail:
         evt["detail"] = detail
+    if max_tokens is not None:
+        evt["max_tokens"] = max_tokens
+    if timeout is not None:
+        evt["timeout"] = timeout
     return json.dumps(evt) + "\n"
 
 
@@ -857,6 +873,11 @@ async def full_rca_stream(
     }) + "\n"
 
     expanded = await llm_expand_keywords(structured, bug_desc, api_key, max_tokens=_max_tokens, timeout=_timeout)
+
+    # Emit token usage for Step 2
+    step2_usage = expanded.get("usage", {})
+    if step2_usage:
+        yield json.dumps({"type": "token_usage", "step": 2, **step2_usage, "max_tokens": _max_tokens}) + "\n"
 
     now = time.time()
     yield _step_event(2, "done", elapsed=now - step_start,

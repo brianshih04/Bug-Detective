@@ -74,11 +74,11 @@
             <select id="topKSelect" aria-label="搜尋結果數量">
               <option value="10">搜尋 10 筆</option>
               <option value="15">搜尋 15 筆</option>
-              <option value="20" selected>搜尋 20 筆</option>
+              <option value="20">搜尋 20 筆</option>
               <option value="30">搜尋 30 筆</option>
               <option value="50">搜尋 50 筆</option>
               <option value="80">搜尋 80 筆</option>
-              <option value="100">搜尋 100 筆</option>
+              <option value="100" selected>搜尋 100 筆</option>
             </select>
           </div>
           <div style="display:flex;align-items:center;gap:10px;">
@@ -152,10 +152,7 @@
         </div>
       </div>
     </section>
-  </div>
 
-  <!-- RIGHT COLUMN -->
-  <div class="column">
     <!-- Search Results -->
     <section class="card hidden" id="searchCard" aria-labelledby="searchResultsHeading">
       <div class="card-header">
@@ -168,7 +165,10 @@
       </div>
       <div class="card-body collapsible" id="searchBody" role="list"></div>
     </section>
+  </div>
 
+  <!-- RIGHT COLUMN -->
+  <div class="column">
     <!-- Analysis Result -->
     <section class="card hidden" id="analysisCard" aria-labelledby="analysisHeading">
       <div class="card-header"><span class="emoji" aria-hidden="true">🤖</span> <span id="analysisHeading">AI 分析</span></div>
