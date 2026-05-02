@@ -51,15 +51,13 @@ bug-detective/
 │   ├── build-index.py     # 程式碼索引建置（JSON grep 用）
 │   ├── build-embeddings.py# ONNX 嵌入索引建置
 │   └── embed-search.py    # 嵌入搜尋工具
-├── data/
-│   ├── code-index.json    # 程式碼索引（grep 用）
-│   ├── embeddings-meta.json
-│   ├── embeddings.npy
-│   └── llm-config.json    # LLM 設定（已 gitignore）
-├── .env                   # 環境變數（已 gitignore）
+├── data/                  # 執行期資料（.gitignore）
+├── .env.example           # 環境變數範本
+├── requirements.txt       # Python 依賴
 ├── deploy.sh              # DGX Spark 部署腳本
 ├── Dockerfile             # Docker 容器化
-├── docker-compose.yml     # Docker Compose 設定
+├── docker-compose.yml     # Docker Compose（含 Qdrant）
+├── server.mjs             # [舊版] Express 後端（已廢棄，僅供參考）
 └── .gitignore
 ```
 
@@ -79,20 +77,40 @@ git clone https://github.com/brianshih04/Bug-Detective.git
 cd Bug-Detective
 
 # 2. 建立 Python 虛擬環境並安裝依賴
-python3 -m venv venv
-source venv/bin/activate
-pip install fastapi uvicorn httpx pydantic qdrant-client llama-index llama-index-vector-stores-qdrant llama-index-embeddings-ollama python-dotenv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
-# 3. 啟動 Ollama 並拉取模型
+# 3. 設定環境變數
+cp .env.example .env
+# 編輯 .env，設定 SOURCE_DIR 為你的 C/C++ 原始碼目錄
+```
+
+### Docker 部署（推薦）
+
+```bash
+# 一鍵啟動（含 Qdrant）
+docker compose up -d
+
+# 查看 log
+docker compose logs -f bug-detective
+```
+
+### 手動部署
+
+```bash
+# 1. 啟動 Ollama 並拉取模型
 ollama pull qwen3-embedding:8b
 ollama pull qwen3.6:35b-a3b-200k
 
-# 4. 啟動 Qdrant
+# 2. 啟動 Qdrant
 docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
 
-# 5. 設定環境變數（或複製 .env.example）
-cp .env.example .env
-# 編輯 .env，設定 SOURCE_DIR 為你的 C/C++ 原始碼目錄
+# 3. 建置向量索引
+python -m backend.ingest
+
+# 4. 啟動伺服器
+python -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 --reload
 ```
 
 ### 建置索引
@@ -105,10 +123,10 @@ python -m backend.ingest
 ### 啟動伺服器
 
 ```bash
-# 開發模式
+# 開發模式（自動重載）
 python -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 --reload
 
-# 正式模式
+# 正式模式（DGX Spark 部署用）
 setsid .venv/bin/python -m uvicorn backend.server:app --host 0.0.0.0 --port 17580 > /tmp/bug-detective.log 2>&1 < /dev/null &
 ```
 

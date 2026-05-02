@@ -1,27 +1,17 @@
-FROM node:24-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Node.js deps
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # App files
-COPY server.mjs .
+COPY backend/ ./backend/
 COPY public/ ./public/
 COPY scripts/ ./scripts/
 COPY data/ ./data/
 
-# Python for embedding search
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir \
-    numpy onnxruntime-gpu tokenizers huggingface_hub
-
 EXPOSE 17580
 
-CMD ["node", "--env-file=.env", "server.mjs"]
+CMD ["python", "-m", "uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "17580"]
