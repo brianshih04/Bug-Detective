@@ -159,9 +159,14 @@
     try {
       const res = await fetch(API + '/api/health');
       if (res.ok) {
+        const data = await res.json();
         statusBadge.className = 'status-badge online';
         statusBadge.setAttribute('aria-label', '後端狀態：線上');
         statusText.textContent = '線上';
+        if (data.version) {
+          const el = $('appVersion');
+          if (el) el.textContent = data.version;
+        }
         return true;
       }
     } catch(e) {}

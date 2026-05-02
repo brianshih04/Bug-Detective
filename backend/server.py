@@ -1,6 +1,7 @@
 """Bug-Detective FastAPI Server with LlamaIndex RAG."""
 import json
 import os
+import subprocess
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -87,9 +88,30 @@ async def serve_index():
     return JSONResponse({"error": "Frontend not built"}, status_code=404)
 
 # --- API Routes ---
+def _git_version():
+    """Get short git commit hash and dirty flag."""
+    try:
+        base = Path(__file__).parent.parent
+        rev = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(base), stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=str(base), stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip()
+        dirty = "*" if status else ""
+        return f"v2.0-{rev}{dirty}"
+    except Exception:
+        return "v2.0-unknown"
+
+
+APP_VERSION = _git_version()
+
+
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "2.0"}
+    return {"status": "ok", "version": APP_VERSION}
 
 @app.get("/api/repos/status")
 async def repos_status(request: Request):

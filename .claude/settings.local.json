@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git tag *)",
+      "Bash(grep *)",
+      "Bash(python -c \"from backend.server import app; print\\('Server module OK'\\)\")",
+      "Bash(pip list *)",
+      "Bash(git branch *)",
+      "Bash(git add *)",
+      "Bash(git checkout *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git merge *)"
+    ]
+  }
+}
