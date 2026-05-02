@@ -713,6 +713,7 @@ def _extract_keywords_from_drain(
     drain_result: dict,
     regex_result: dict,
     bug_desc: str,
+    keyword_limit: int = KEYWORD_SEARCH_LIMIT,
 ) -> dict:
     """Extract exact and semantic keywords from Drain + Regex results.
 
@@ -853,8 +854,8 @@ def _extract_keywords_from_drain(
             summary_parts.append(f"異常: {'; '.join(anomaly_descs)}")
 
     return {
-        "exact": exact_deduped[:KEYWORD_SEARCH_LIMIT],
-        "semantic": sorted(semantic_set)[:KEYWORD_SEARCH_LIMIT],
+        "exact": exact_deduped[:keyword_limit],
+        "semantic": sorted(semantic_set)[:keyword_limit],
         "summary": " | ".join(summary_parts)[:100],
     }
 
@@ -1774,6 +1775,7 @@ async def full_rca_stream(
     api_key: str = "",
     top_k: int = DEFAULT_TOP_K,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    keyword_limit: int = 50,
     max_tokens: int = 0,
     timeout: int = 0,
 ) -> AsyncGenerator[str, None]:
@@ -1920,7 +1922,7 @@ async def full_rca_stream(
         + "\n"
     )
 
-    expanded = _extract_keywords_from_drain(drain_result, regex_result, bug_desc)
+    expanded = _extract_keywords_from_drain(drain_result, regex_result, bug_desc, keyword_limit=keyword_limit)
 
     now = time.time()
     yield _step_event(

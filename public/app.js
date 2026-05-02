@@ -221,6 +221,15 @@
     if (label) { label.textContent = savedFontSize + 'px'; }
   }
 
+  // Restore keyword limit from localStorage
+  var savedKeywordLimit = localStorage.getItem('bugDetective_keywordLimit');
+  if (savedKeywordLimit) {
+    var klSlider = $('cfgKeywordLimit');
+    if (klSlider) { klSlider.value = savedKeywordLimit; }
+    var klLabel = $('keywordLimitValue');
+    if (klLabel) { klLabel.textContent = savedKeywordLimit; }
+  }
+
   // Restore theme from localStorage
   var savedTheme = localStorage.getItem('bugDetective_theme') || 'light';
   document.documentElement.setAttribute('data-theme', savedTheme);
@@ -248,6 +257,15 @@
       document.documentElement.style.fontSize = size + 'px';
       var label = $('fontSizeValue');
       if (label) { label.textContent = size + 'px'; }
+    });
+  }
+
+  // Keyword limit slider live preview
+  var keywordLimitSlider = $('cfgKeywordLimit');
+  if (keywordLimitSlider) {
+    keywordLimitSlider.addEventListener('input', function() {
+      var klLabel = $('keywordLimitValue');
+      if (klLabel) { klLabel.textContent = this.value; }
     });
   }
 
@@ -366,13 +384,14 @@
       var res = await fetch(API + '/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 100, batch_size: parseInt($('batchSizeSelect').value) || 20, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
+        body: JSON.stringify({ bug_description: desc, log_text: log, api_key: _apiKey || (cfgApiKey && cfgApiKey.value.trim()) || '', top_k: parseInt($('topKSelect').value) || 100, batch_size: parseInt($('batchSizeSelect').value) || 20, keyword_limit: parseInt($('cfgKeywordLimit').value) || 50, max_tokens: parseInt(cfgMaxTokens.value) || 0, timeout: parseInt(cfgTimeout.value) || 0 }),
         signal: currentController.signal
       });
 
       localStorage.setItem('bugDetective_topK', $('topKSelect').value);
       localStorage.setItem('bugDetective_batchSize', $('batchSizeSelect').value);
       localStorage.setItem('bugDetective_fontSize', $('cfgFontSize').value);
+      localStorage.setItem('bugDetective_keywordLimit', $('cfgKeywordLimit').value);
       var activeTheme = document.documentElement.getAttribute('data-theme') || 'dark';
       localStorage.setItem('bugDetective_theme', activeTheme);
 

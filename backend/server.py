@@ -38,6 +38,7 @@ class AnalyzeRequest(BaseModel):
     api_key: str = ""  # passed from client, never persisted
     top_k: int = 100  # number of search results for RCA
     batch_size: int = 20  # files per batch in Step 4 (0 = no batching)
+    keyword_limit: int = 50  # max keywords per category (exact/semantic)
     max_tokens: int = 0  # 0 = use server default from llm-config
     timeout: int = 0  # 0 = use server default from llm-config
 
@@ -230,6 +231,7 @@ async def analyze(req: AnalyzeRequest, request: Request):
             req.api_key,
             top_k=req.top_k,
             batch_size=req.batch_size,
+            keyword_limit=req.keyword_limit,
             max_tokens=req.max_tokens,
             timeout=req.timeout,
         ):
