@@ -875,10 +875,6 @@
   btnSettings.addEventListener('click', openSettings);
   btnCloseSettings.addEventListener('click', closeSettings);
   btnCancelSettings.addEventListener('click', closeSettings);
-  // Allow backdrop click to close
-  settingsModal.addEventListener('click', function(e) {
-    if (e.target === settingsModal) closeSettings();
-  });
 
   function openSettings() {
     lastFocusedElement = document.activeElement;
