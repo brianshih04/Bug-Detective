@@ -996,39 +996,59 @@
     if (!text) return '';
     var html = text;
 
+    // 1. Extract code blocks to prevent escapeHtml from mangling them
+    var codeBlocks = [];
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
-      return '<pre><code>' + escapeHtml(code.trim()) + '</code></pre>';
+      var idx = codeBlocks.length;
+      codeBlocks.push('<pre><code>' + escapeHtml(code.trim()) + '</code></pre>');
+      return '%%CB' + idx + '%%';
     });
     html = html.replace(/```(\w*)\n([\s\S]*)$/g, function(_, lang, code) {
-      return '<pre><code>' + escapeHtml(code.trimEnd()) + '</code></pre>';
+      var idx = codeBlocks.length;
+      codeBlocks.push('<pre><code>' + escapeHtml(code.trimEnd()) + '</code></pre>');
+      return '%%CB' + idx + '%%';
     });
 
-    html = html.replace(/`([^`]+)`/g, function(_, code) { return '<code>' + escapeHtml(code) + '</code>'; });
+    // 2. Extract inline code
+    html = html.replace(/`([^`]+)`/g, function(_, code) {
+      var idx = codeBlocks.length;
+      codeBlocks.push('<code>' + escapeHtml(code) + '</code>');
+      return '%%CB' + idx + '%%';
+    });
 
-    html = html.replace(/^######\s+(.+)$/gm, function(_, t) { return '<h6>' + escapeHtml(t) + '</h6>'; });
-    html = html.replace(/^#####\s+(.+)$/gm, function(_, t) { return '<h5>' + escapeHtml(t) + '</h5>'; });
-    html = html.replace(/^####\s+(.+)$/gm, function(_, t) { return '<h4>' + escapeHtml(t) + '</h4>'; });
-    html = html.replace(/^###\s+(.+)$/gm, function(_, t) { return '<h3>' + escapeHtml(t) + '</h3>'; });
-    html = html.replace(/^##\s+(.+)$/gm, function(_, t) { return '<h2>' + escapeHtml(t) + '</h2>'; });
-    html = html.replace(/^#\s+(.+)$/gm, function(_, t) { return '<h1>' + escapeHtml(t) + '</h1>'; });
+    // 3. Escape all remaining raw text (XSS prevention — done ONCE)
+    html = escapeHtml(html);
 
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, function(_, t) { return '<strong><em>' + escapeHtml(t) + '</em></strong>'; });
-    html = html.replace(/\*\*(.+?)\*\*/g, function(_, t) { return '<strong>' + escapeHtml(t) + '</strong>'; });
-    html = html.replace(/\*(.+?)\*/g, function(_, t) { return '<em>' + escapeHtml(t) + '</em>'; });
-    html = html.replace(/~~(.+?)~~/g, function(_, t) { return '<del>' + escapeHtml(t) + '</del>'; });
+    // 4. Restore code blocks (already safe HTML)
+    for (var i = 0; i < codeBlocks.length; i++) {
+      html = html.split('%%CB' + i + '%%').join(codeBlocks[i]);
+    }
 
+    // 5. Apply markdown formatting (text is already escaped, no need for escapeHtml in callbacks)
+    html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
+    html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
+    html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+    // Links: text and url are already escaped; just block javascript: scheme
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
-      url = escapeHtml(url);
-      if (/^javascript\s*:/i.test(url)) return escapeHtml(text);
-      return '<a href="' + url + '" target="_blank" rel="noopener">' + escapeHtml(text) + '</a>';
+      if (/^javascript\s*:/i.test(url)) return text;
+      return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>';
     });
 
-    html = html.replace(/^>\s+(.+)$/gm, function(_, t) { return '<blockquote>' + escapeHtml(t) + '</blockquote>'; });
+    html = html.replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>');
 
-    html = html.replace(/^[\-\*]\s+(.+)$/gm, function(_, t) { return '<li>' + escapeHtml(t) + '</li>'; });
+    html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
 
-    html = html.replace(/^\d+\.\s+(.+)$/gm, function(_, t) { return '<li>' + escapeHtml(t) + '</li>'; });
+    html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, function(match) {
       if (match.indexOf('<ul>') >= 0) return match;
       return '<ol>' + match + '</ol>';
