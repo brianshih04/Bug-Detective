@@ -22,7 +22,7 @@ from backend.config import (
     PORT, QDRANT_URL, COLLECTION_NAME,
     OLLAMA_URL, load_llm_config, save_llm_config, LLM_PRESETS, DATA_DIR, PUBLIC_DIR,
 )
-from backend.rca import hybrid_search, full_rca_stream
+from backend.rca import hybrid_search, full_rca_stream, close_shared_clients
 from backend.security import sanitize_for_cloud
 
 # --- Pydantic models ---
@@ -79,6 +79,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     print("Shutting down...")
+    await close_shared_clients()
 
 app = FastAPI(title="Bug-Detective", version="2.0", lifespan=lifespan)
 

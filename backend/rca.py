@@ -9,7 +9,7 @@ import asyncio
 import json
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -52,6 +52,14 @@ def _get_shared_http_client(timeout: float = 300) -> httpx.AsyncClient:
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
     return _shared_http_client
+
+
+async def close_shared_clients():
+    """Gracefully close shared httpx client (call on shutdown)."""
+    global _shared_http_client
+    if _shared_http_client is not None:
+        await _shared_http_client.aclose()
+        _shared_http_client = None
 
 
 async def call_llm_stream(
@@ -132,6 +140,14 @@ async def call_llm_sync(
 # Index / Retriever setup
 # ---------------------------------------------------------------------------
 _RETRIEVER_CACHE: dict[int, object] = {}
+_SHARED_QDRANT_CLIENT: "QdrantClient | None" = None
+
+def _get_shared_qdrant_client() -> "QdrantClient":
+    """Share a single QdrantClient across all retrievers."""
+    global _SHARED_QDRANT_CLIENT
+    if _SHARED_QDRANT_CLIENT is None:
+        _SHARED_QDRANT_CLIENT = QdrantClient(url=QDRANT_URL)
+    return _SHARED_QDRANT_CLIENT
 
 def get_retriever(similarity_top_k: int = 10):
     """Get vector retriever from Qdrant (cached by top_k)."""
@@ -142,7 +158,7 @@ def get_retriever(similarity_top_k: int = 10):
         base_url=OLLAMA_URL,
         embed_dim=EMBEDDING_DIM,
     )
-    qdrant_client = QdrantClient(url=QDRANT_URL)
+    qdrant_client = _get_shared_qdrant_client()
     vector_store = QdrantVectorStore(
         client=qdrant_client, collection_name=COLLECTION_NAME,
     )
@@ -205,8 +221,6 @@ def get_keyword_index() -> dict[str, list[tuple[str, int, str]]]:
 # =========================================================================
 # STEP 0: Rule-based Log Filtering & Deduplication
 # =========================================================================
-import re
-from collections import Counter, defaultdict
 
 # ── Blacklist: known noisy patterns to drop entirely (unless near errors) ──
 _NOISE_PATTERNS = [
@@ -647,6 +661,7 @@ async def keyword_search(
     """Search source code using inverted index (built once at startup)."""
     results = []
     seen_files = {}  # file_path → best rank
+    _file_cache = {}  # rel_path → file content (per-call cache)
 
     root = Path(source_dir)
     if not root.exists():
@@ -699,8 +714,9 @@ async def keyword_search(
                     seen_files[rel_path] = len(results)
                     fpath = root / rel_path
                     try:
-                        content = fpath.read_text(encoding="utf-8", errors="replace")
-                        lines = content.split("\n")
+                        if rel_path not in _file_cache:
+                            _file_cache[rel_path] = fpath.read_text(encoding="utf-8", errors="replace")
+                        lines = _file_cache[rel_path].split("\n")
                         start = max(0, line_no - 5)
                         end = min(len(lines), line_no + 10)
                         snippet = "\n".join(lines[start:end])[:800]
