@@ -1,0 +1,10 @@
+[project]
+name = "bug-detective"
+version = "2.5.0"
+description = "RAG-based code analysis and root cause analysis tool"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+filterwarnings = ["ignore::DeprecationWarning"]
