@@ -1758,16 +1758,64 @@ async def _step4_deep_analysis(
         )
         messages = [{"role": "user", "content": synthesis_prompt}]
 
-        async for chunk in call_llm_stream(
-            llm_cfg["base_url"],
-            api_key or llm_cfg.get("api_key", ""),
-            llm_cfg["model"],
-            messages,
-            temperature=temperature,
-            max_tokens=_max_tokens,
-            timeout=_timeout,
-        ):
-            yield chunk
+        # Stream synthesis: forward thinking to frontend, inject periodic "統整中..."
+        synthesis_done = False
+        last_event_time = asyncio.get_event_loop().time()
+
+        async def _synthesis_stream():
+            nonlocal synthesis_done, last_event_time
+            async for chunk in call_llm_stream(
+                llm_cfg["base_url"],
+                api_key or llm_cfg.get("api_key", ""),
+                llm_cfg["model"],
+                messages,
+                temperature=temperature,
+                max_tokens=_max_tokens,
+                timeout=_timeout,
+            ):
+                last_event_time = asyncio.get_event_loop().time()
+                yield chunk
+            synthesis_done = True
+
+        async def _synthesis_keepalive():
+            while not synthesis_done:
+                await asyncio.sleep(15)
+                if not synthesis_done:
+                    yield json.dumps({"type": "status", "text": "🔄 統整分析中..."}) + "\n"
+
+        # Merge two async generators via queue
+        _q: asyncio.Queue[str | None] = asyncio.Queue()
+        _finished = False
+
+        async def _reader():
+            nonlocal _finished
+            try:
+                async for chunk in _synthesis_stream():
+                    await _q.put(chunk)
+            finally:
+                if not _finished:
+                    _finished = True
+                    await _q.put(None)
+
+        async def _pinger():
+            while not _finished:
+                await asyncio.sleep(15)
+                if not _finished:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_event_time >= 15:
+                        await _q.put(json.dumps({"type": "status", "text": "🔄 統整分析中..."}) + "\n")
+
+        _r_task = asyncio.create_task(_reader())
+        _p_task = asyncio.create_task(_pinger())
+        try:
+            while True:
+                item = await asyncio.wait_for(_q.get(), timeout=20)
+                if item is None:
+                    break
+                yield item
+        finally:
+            _r_task.cancel()
+            _p_task.cancel()
 
     else:
         # ── No batching: original single-call flow ──
