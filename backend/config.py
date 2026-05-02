@@ -30,6 +30,9 @@ GLM5_BASE_URL = _env("GLM5_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
 GLM5_API_KEY = _env("GLM5_API_KEY")
 GLM5_MODEL = _env("GLM5_MODEL", "glm-5-turbo")
 
+# DeepSeek Cloud
+DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY", "sk-3f661927352d42cd851a55eef03c57bd")
+
 # --- Server ---
 PORT = int(_env("PORT", "17580"))
 
@@ -127,7 +130,7 @@ LLM_PRESETS = {
     },
     "deepseek": {
         "base_url": "https://api.deepseek.com",
-        "api_key": "",
+        "api_key": DEEPSEEK_API_KEY,
         "model": "deepseek-chat",
         "provider": "deepseek",
         "max_tokens": 16000,
