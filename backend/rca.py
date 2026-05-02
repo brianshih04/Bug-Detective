@@ -99,7 +99,11 @@ async def call_llm_sync(
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(_chat_url(base_url), json=payload, headers=headers)
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        msg = resp.json()["choices"][0]["message"]
+        # Ollama reasoning models put thinking in reasoning_content, answer in content
+        content = msg.get("content", "") or ""
+        reasoning = msg.get("reasoning_content", "") or ""
+        return content.strip() or reasoning.strip() or ""
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +439,7 @@ async def llm_expand_keywords(
         key = ""
         model = OLLAMA_MODEL
         max_tok = 4096
+        ollama_timeout = 300  # reasoning models are slow
     else:
         base_url = llm_cfg["base_url"]
         key = api_key or llm_cfg.get("api_key", "")
@@ -482,7 +487,8 @@ async def llm_expand_keywords(
     try:
         resp = await call_llm_sync(
             base_url, key, model,
-            messages, temperature=0.1, max_tokens=max_tok, timeout=90,
+            messages, temperature=0.1, max_tokens=max_tok,
+            timeout=ollama_timeout if llm_cfg.get("provider") == "ollama" else 90,
         )
         # Handle reasoning models that put answer in reasoning field
         if not resp.strip():
@@ -949,11 +955,12 @@ async def full_rca_stream(
     messages = [{"role": "user", "content": prompt}]
 
     try:
+        step4_timeout = 600 if llm_cfg.get("provider") == "ollama" else 180
         async for chunk in call_llm_stream(
             llm_cfg["base_url"],
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
-            messages, temperature=0.3, max_tokens=4096, timeout=180,
+            messages, temperature=0.3, max_tokens=4096, timeout=step4_timeout,
         ):
             yield chunk
     except Exception as e:
