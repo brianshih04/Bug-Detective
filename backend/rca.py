@@ -1,7 +1,8 @@
-"""Root Cause Analysis: 4-step pipeline.
+"""Root Cause Analysis: 5-step pipeline.
 
-Step 1: Regex log extraction (error codes, func names, file paths)
-Step 2: LLM semantic expansion (Qwen local — synonyms, related modules)
+Step 0: Rule-based log dedup / condensation
+Step 1: Chunked LLM log parsing (local Ollama — per-chunk event/keyword extraction)
+Step 2: Synthesis of chunk results into final keywords
 Step 3: Hybrid search (keyword grep + Qdrant vector → RRF fusion)
 Step 4: Cloud LLM deep analysis (GLM-5 / OpenRouter / MiniMax)
 """
@@ -44,6 +45,8 @@ VECTOR_SEARCH_TIMEOUT = 30  # seconds
 RRF_K = 60  # Reciprocal Rank Fusion constant
 DEFAULT_BATCH_SIZE = 20  # Step 4 batch size
 PER_BATCH_TIMEOUT_CAP = 300  # 5 min cap per-batch in Step 4
+LOG_CHUNK_SIZE = 16000  # chars per log chunk for chunked LLM parsing
+LOG_CHUNK_OVERLAP_LINES = 5  # overlap lines between chunks for context continuity
 
 
 # ---------------------------------------------------------------------------
@@ -482,8 +485,57 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
     return "\n".join(summary + output)
 
 
+# ---------------------------------------------------------------------------
+# Chunked LLM Log Parsing Prompts
+# ---------------------------------------------------------------------------
+_PARSE_LOG_CHUNK_PROMPT = """你是一個 C/C++ 嵌入式系統（MFP 印表機）的 Log 分析助手。
+以下是 Bug 描述和一段 Log（第 {chunk_idx}/{total_chunks} 段）。
+請從這段 Log 中提取所有重要資訊。
+
+## Bug 描述
+{bug_desc}
+
+## Log 片段
+```
+{chunk_text}
+```
+
+## 任務
+請分析這段 Log，提取：
+1. **events**：重要的時間點事件（如錯誤發生、狀態轉換、異常行為），
+   每個事件包含 desc（描述）和 severity（嚴重程度：critical/high/medium/low）。
+2. **keywords**：可以精確搜尋原始碼的關鍵字（error code、function name、
+   變數名稱、macro、file path），最多 15 個。
+3. **patterns**：錯誤模式或重複出現的異常模式描述，最多 10 個。
+
+請「只」回覆 JSON，不要加任何其他文字或 markdown code block：
+{{"events": [{{"desc": "...", "severity": "critical"}}], "keywords": ["kw1"], "patterns": ["pattern1"]}}"""
+
+_SYNTHESIZE_CHUNKS_PROMPT = """你是一個 C/C++ 嵌入式系統（MFP 印表機）的 Bug 分析助手。
+以下是各段 Log 的分析結果彙總和 Bug 描述。
+請統整所有片段的分析結果，產生最終的搜尋關鍵字。
+
+## Bug 描述
+{bug_desc}
+
+## 各段 Log 分析結果（共 {total_chunks} 段）
+{chunk_summaries}
+
+## 任務
+請根據以上所有片段的分析結果，產生用來搜尋原始碼的關鍵字，分為兩類：
+
+1. **exact**：精確匹配的關鍵字（error code、function name、變數名稱、macro 名稱），
+   這些關鍵字必須能在程式碼中直接找到。最多 20 個。
+2. **semantic**：語意相關的關鍵字（相關模組名稱、同義詞、功能描述詞），
+   用來做語意搜尋，找到字面上不同但概念相關的程式碼。最多 20 個。
+3. **summary**：用一句話（50 字以內）描述這個 Bug 的核心問題。
+
+請「只」回覆 JSON，不要加任何其他文字或 markdown code block：
+{{"exact": ["keyword1", "keyword2"], "semantic": ["related1", "related2"], "summary": "核心問題描述"}}"""
+
+
 # =========================================================================
-# STEP 1: Regex Log Extraction
+# STEP 1: Regex Log Extraction (fallback — kept for non-LLM scenarios)
 # =========================================================================
 # Regex patterns for structured extraction from C/C++ logs
 _LOG_PATTERNS = {
@@ -683,6 +735,177 @@ async def llm_expand_keywords(
             "structured": structured,
             "error": error_msg,
         }
+
+
+# =========================================================================
+# Chunked LLM Log Parsing (replaces regex Step 1 + LLM Step 2 in pipeline)
+# =========================================================================
+def _chunk_log(log_text: str, chunk_size: int = LOG_CHUNK_SIZE, overlap: int = LOG_CHUNK_OVERLAP_LINES) -> list[str]:
+    """Split log text into chunks of ~chunk_size characters at line boundaries.
+
+    Each chunk (except the first) prepends the last `overlap` lines of the
+    previous chunk for context continuity.
+    """
+    if not log_text:
+        return []
+    if len(log_text) <= chunk_size:
+        return [log_text]
+
+    lines = log_text.split("\n")
+    chunks: list[str] = []
+    current_lines: list[str] = []
+    current_len = 0
+
+    for _i, line in enumerate(lines):
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > chunk_size and current_lines:
+            # Emit current chunk
+            chunks.append("\n".join(current_lines))
+            # Keep last `overlap` lines for continuity
+            overlap_lines = current_lines[-overlap:] if overlap > 0 else []
+            current_lines = list(overlap_lines)
+            current_len = sum(len(ln) + 1 for ln in current_lines)
+
+        current_lines.append(line)
+        current_len += line_len
+
+    # Don't forget the last chunk
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+
+    return chunks
+
+
+def _parse_llm_json_response(resp: str) -> dict:
+    """Parse JSON from LLM response, stripping markdown code blocks and fixing truncation."""
+    resp = resp.strip()
+    if resp.startswith("```"):
+        resp = re.sub(r"^```\w*\n?", "", resp)
+        resp = re.sub(r"\n?```$", "", resp)
+    json_match = re.search(r"\{.*\}", resp, re.DOTALL)
+    if json_match:
+        resp = json_match.group(0)
+        open_brackets = resp.count("[") - resp.count("]")
+        open_braces = resp.count("{") - resp.count("}")
+        if open_brackets > 0 or open_braces > 0:
+            resp = resp.rstrip().rstrip(",") + "]" * max(0, open_brackets) + "}" * max(0, open_braces)
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+async def _parse_single_chunk(chunk_idx: int, total_chunks: int, chunk_text: str, bug_desc: str) -> dict:
+    """Parse a single log chunk using local Ollama LLM.
+
+    Returns parsed JSON with events/keywords/patterns, or empty dict on failure.
+    """
+    prompt = _PARSE_LOG_CHUNK_PROMPT.format(
+        chunk_idx=chunk_idx + 1,
+        total_chunks=total_chunks,
+        bug_desc=bug_desc,
+        chunk_text=chunk_text,
+    )
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        resp, usage = await call_llm_sync(
+            OLLAMA_URL + "/v1",
+            "",
+            OLLAMA_MODEL,
+            messages,
+            temperature=0.1,
+            max_tokens=4096,
+            timeout=300,
+        )
+        if not resp.strip():
+            return {}
+        return _parse_llm_json_response(resp)
+    except Exception:
+        return {}
+
+
+async def _synthesize_chunk_results(chunk_results: list[dict], bug_desc: str) -> dict:
+    """Synthesize all chunk parsing results into final keywords using Ollama.
+
+    Returns {exact: [...], semantic: [...], summary: "..."}.
+    On failure, falls back to collecting all keywords from chunks.
+    """
+    # Build summary of all chunk results
+    summaries = []
+    all_keywords: list[str] = []
+    all_patterns: list[str] = []
+
+    for i, cr in enumerate(chunk_results):
+        if not cr:
+            continue
+        events = cr.get("events", [])
+        kws = cr.get("keywords", [])
+        pats = cr.get("patterns", [])
+
+        event_descs = [f"  - [{e.get('severity', '?')}] {e.get('desc', '')}" for e in events[:5]]
+        summary_lines = [f"片段 {i + 1}:"]
+        if event_descs:
+            summary_lines.append("事件:\n" + "\n".join(event_descs))
+        if kws:
+            summary_lines.append(f"關鍵字: {', '.join(kws[:15])}")
+        if pats:
+            summary_lines.append(f"模式: {', '.join(pats[:10])}")
+
+        summaries.append("\n".join(summary_lines))
+        all_keywords.extend(kws)
+        all_patterns.extend(pats)
+
+    if not summaries:
+        # No successful chunk results — return empty
+        return {"exact": [], "semantic": [], "summary": bug_desc[:100]}
+
+    chunk_summaries_text = "\n\n".join(summaries)
+    prompt = _SYNTHESIZE_CHUNKS_PROMPT.format(
+        bug_desc=bug_desc,
+        chunk_summaries=chunk_summaries_text,
+        total_chunks=len(chunk_results),
+    )
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        resp, usage = await call_llm_sync(
+            OLLAMA_URL + "/v1",
+            "",
+            OLLAMA_MODEL,
+            messages,
+            temperature=0.1,
+            max_tokens=4096,
+            timeout=300,
+        )
+        if not resp.strip():
+            raise ValueError("Empty LLM response")
+
+        parsed = _parse_llm_json_response(resp)
+        if parsed:
+            return {
+                "exact": parsed.get("exact", [])[:20],
+                "semantic": parsed.get("semantic", [])[:20],
+                "summary": parsed.get("summary", bug_desc[:100]),
+                "usage": usage or {},
+            }
+    except Exception:
+        pass
+
+    # Fallback: collect all keywords from chunks
+    seen = set()
+    exact = []
+    for kw in all_keywords:
+        kw_l = kw.lower()
+        if kw_l not in seen and len(exact) < 20:
+            seen.add(kw_l)
+            exact.append(kw)
+    return {
+        "exact": exact,
+        "semantic": all_patterns[:20],
+        "summary": bug_desc[:100],
+    }
 
 
 # =========================================================================
@@ -1101,7 +1324,7 @@ async def _step4_deep_analysis(
             json.dumps(
                 {
                     "type": "status",
-                    "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
+                    "text": "🚀 Step 5/5: 雲端 LLM 深度分析中...",
                 }
             )
             + "\n"
@@ -1174,7 +1397,7 @@ async def full_rca_stream(
         json.dumps(
             {
                 "type": "status",
-                "text": f"📝 Step 0/5: Log 去重壓縮（{len(log_text):,} chars）...",
+                "text": f"📝 Step 1/5: Log 去重壓縮（{len(log_text):,} chars）...",
             }
         )
         + "\n"
@@ -1218,64 +1441,83 @@ async def full_rca_stream(
     log_text = condensed_log
     step_start = time.time()
 
-    # ── Step 1: Regex extraction ──────────────────────────────────
+    # ── Step 1: Chunked LLM log parsing ──────────────────────────
     yield _step_event(1, "active", elapsed=time.time() - t0)
+
+    # Split log into chunks
+    chunks = _chunk_log(log_text)
+    n_chunks = len(chunks)
     yield (
         json.dumps(
             {
                 "type": "status",
-                "text": "🔧 Step 1/5: 從精簡 Log 中萃取結構化資訊（Error codes, Functions, Files）...",
+                "text": f"🧠 Step 2/5: LLM 智慧 Log 解析（分 {n_chunks} 段）...",
             }
         )
         + "\n"
     )
 
-    structured = extract_structured_log(log_text)
+    # Parse each chunk with LLM
+    chunk_results: list[dict] = []
+    for ci, chunk_text in enumerate(chunks):
+        yield (
+            json.dumps(
+                {
+                    "type": "status",
+                    "text": f"  📄 分析 Chunk {ci + 1}/{n_chunks}（{len(chunk_text):,} chars）...",
+                }
+            )
+            + "\n"
+        )
+        cr = await _parse_single_chunk(ci, n_chunks, chunk_text, bug_desc)
+        chunk_results.append(cr)
+        n_events = len(cr.get("events", []))
+        n_kws = len(cr.get("keywords", []))
+        n_pats = len(cr.get("patterns", []))
+        yield (
+            json.dumps(
+                {
+                    "type": "status",
+                    "text": f"  ✅ Chunk {ci + 1}/{n_chunks}: {n_events} 事件, {n_kws} 關鍵字, {n_pats} 模式",
+                }
+            )
+            + "\n"
+        )
 
     now = time.time()
-    total_extracted = sum(len(v) for v in structured.values() if isinstance(v, list))
-    yield _step_event(1, "done", elapsed=now - step_start)
+    total_events = sum(len(cr.get("events", [])) for cr in chunk_results)
+    total_kws = sum(len(cr.get("keywords", [])) for cr in chunk_results)
+    yield _step_event(1, "done", elapsed=now - step_start, detail=f"{n_chunks} chunks, {total_events} events")
     yield (
         json.dumps(
             {
                 "type": "step1_result",
                 "data": {
-                    "error_codes": structured["error_codes"],
-                    "function_names": structured["function_names"],
-                    "file_paths": structured["file_paths"],
-                    "exceptions": structured["exceptions"],
-                    "memory_addresses": structured.get("memory_addresses", []),
-                    "error_lines": structured["error_lines"][:200],
-                    "error_lines_count": len(structured["error_lines"]),
+                    "chunks_total": n_chunks,
+                    "chunks_parsed": sum(1 for cr in chunk_results if cr),
+                    "total_events": total_events,
+                    "total_keywords": total_kws,
+                    "chunk_results": chunk_results,
                 },
-            }
-        )
-        + "\n"
-    )
-    yield (
-        json.dumps(
-            {
-                "type": "status",
-                "text": f"  ✅ 萃取到 {total_extracted} 個結構化元素",
             }
         )
         + "\n"
     )
     step_start = time.time()
 
-    # ── Step 2: LLM semantic expansion ───────────────────────────
+    # ── Step 2: Synthesize chunk results ─────────────────────────
     yield _step_event(2, "active", elapsed=time.time() - t0)
     yield (
         json.dumps(
             {
                 "type": "status",
-                "text": "🧠 Step 2/5: 語意擴充（同義詞、相關模組）...",
+                "text": "🔀 Step 3/5: 統合分析結果...",
             }
         )
         + "\n"
     )
 
-    expanded = await llm_expand_keywords(structured, bug_desc, api_key, max_tokens=_max_tokens, timeout=_timeout)
+    expanded = await _synthesize_chunk_results(chunk_results, bug_desc)
 
     # Emit token usage for Step 2
     step2_usage = expanded.get("usage", {})
@@ -1319,7 +1561,7 @@ async def full_rca_stream(
         json.dumps(
             {
                 "type": "status",
-                "text": "🔎 Step 3/5: Hybrid Search（Keyword grep + Vector 語意搜尋 → RRF 融合）...",
+                "text": "🔎 Step 4/5: Hybrid Search（Keyword grep + Vector 語意搜尋 → RRF 融合）...",
             }
         )
         + "\n"
