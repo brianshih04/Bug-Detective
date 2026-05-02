@@ -118,36 +118,36 @@
 
 /* ===== THEME: coffee ===== */
 [data-theme="coffee"] {
-  --bg-primary: #1a1210;
-  --bg-secondary: #231a16;
-  --bg-card: #2c201a;
-  --bg-input: #352a22;
+  --bg-primary: #171010;
+  --bg-secondary: #1f1614;
+  --bg-card: #2a1f1a;
+  --bg-input: #332720;
   --bg-hover: #3e322a;
   --bg-active: #4a3d34;
   --border: #3e322a;
-  --border-focus: #c49a6c;
-  --text-primary: #e8d5c4;
-  --text-secondary: #b09882;
-  --text-muted: #7a6652;
-  --accent: #c49a6c;
-  --accent-hover: #d4aa7c;
-  --accent-glow: rgba(196,154,108,.2);
+  --border-focus: #d4a574;
+  --text-primary: #f5ebe0;
+  --text-secondary: #c4a882;
+  --text-muted: #8a7460;
+  --accent: #d4a574;
+  --accent-hover: #e0b888;
+  --accent-glow: rgba(212,165,116,.2);
   --green: #8fbc6b;
   --green-bg: rgba(143,188,107,.1);
-  --red: #d4696a;
-  --red-bg: rgba(212,105,106,.1);
+  --red: #e87070;
+  --red-bg: rgba(232,112,112,.1);
   --orange: #d4a04a;
   --orange-bg: rgba(212,160,74,.1);
   --cyan: #6bb5b0;
   --shadow: 0 4px 24px rgba(0,0,0,.5);
-  --step0-bg: rgba(196,154,108,.1);
+  --step0-bg: rgba(212,165,116,.1);
   --step1-bg: rgba(212,160,74,.1);
   --step2-bg: rgba(236,72,153,.1);
   --step3-bg: rgba(143,188,107,.1);
   --step4-bg: rgba(124,58,237,.1);
-  --collapsible-toggle-bg: rgba(196,154,108,.1);
+  --collapsible-toggle-bg: rgba(212,165,116,.1);
   --collapsible-toggle-color: var(--accent);
-  --collapsible-body-bg: #15100d;
+  --collapsible-body-bg: #110c0a;
 }
  html { font-size: 15px; }
 body {
