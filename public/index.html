@@ -229,7 +229,7 @@
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label>預設設定</label>
+        <label>預設設定 <button class="btn btn-secondary" id="btnDefaultSettings" style="float:right;font-size:12px;padding:4px 10px;margin-top:-2px;" aria-label="重設為預設值">🔄 預設值</button></label>
         <div class="preset-btns" id="presetBtns" role="group" aria-label="LLM Provider 預設">
           <button class="preset-btn" data-provider="ollama">🦙 Ollama</button>
           <button class="preset-btn" data-provider="glm5">🧠 GLM-5</button>
@@ -296,7 +296,7 @@
       </div>
       <div class="form-group">
         <label for="cfgTemperature">LLM 溫度（Temperature）<span id="temperatureValue" style="font-weight:normal;color:var(--text-muted);font-size:12px;">0.3</span></label>
-        <input type="range" id="cfgTemperature" min="0" max="2" step="0.1" value="0.3" style="width:100%;accent-color:var(--accent);">
+        <input type="range" id="cfgTemperature" min="0" max="1.0" step="0.1" value="0.3" style="width:100%;accent-color:var(--accent);">
       </div>
     </div>
     <div class="modal-footer">

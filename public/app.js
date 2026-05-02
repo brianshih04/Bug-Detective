@@ -1012,6 +1012,45 @@
     }
   });
 
+  // Default settings button — reset all to defaults
+  var btnDefaultSettings = $('btnDefaultSettings');
+  if (btnDefaultSettings) {
+    btnDefaultSettings.addEventListener('click', async function() {
+      try {
+        var res = await fetch(API + '/api/llm-config/preset/ollama');
+        if (res.ok) {
+          var cfg = await res.json();
+          cfgProvider.value = 'ollama';
+          cfgBaseUrl.value = cfg.base_url || '';
+          cfgApiKey.value = '';
+          cfgModel.value = cfg.model || 'qwen3.6:35b-a3b-200k';
+          cfgMaxTokens.value = '16000';
+          cfgTimeout.value = '600';
+          updateApiKeyVisibility();
+          updateApiKeyStatus();
+        }
+      } catch(e) {}
+      // Reset UI-only settings (no backend needed)
+      document.documentElement.setAttribute('data-theme', 'gray');
+      highlightThemeBtn('gray');
+      var fs = $('cfgFontSize');
+      if (fs) { fs.value = 16; document.documentElement.style.fontSize = '16px'; }
+      var fsLabel = $('fontSizeValue');
+      if (fsLabel) { fsLabel.textContent = '16px'; }
+      var kl = $('cfgKeywordLimit');
+      if (kl) { kl.value = 50; }
+      var klLabel = $('keywordLimitValue');
+      if (klLabel) { klLabel.textContent = '50'; }
+      var temp = $('cfgTemperature');
+      if (temp) { temp.value = '0.3'; }
+      var tempLabel = $('temperatureValue');
+      if (tempLabel) { tempLabel.textContent = '0.3'; }
+      // Clear active highlight on provider presets
+      presetBtns.querySelectorAll('.preset-btn').forEach(function(b) { b.classList.remove('active'); });
+      showToast('已重設為預設值', 'success');
+    });
+  }
+
   // Save settings
   btnSaveSettings.addEventListener('click', async function() {
     _apiKey = cfgApiKey.value.trim();
