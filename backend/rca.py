@@ -1089,10 +1089,36 @@ async def full_rca_stream(
     try:
         if batch_size > 0 and total_results > batch_size:
             # ── Phase A: Batch analysis (sync, no streaming to frontend) ──
+            # NOTE: call_llm_sync may take >100s per batch; Cloudflare tunnel
+            # drops idle SSE connections after ~100s, so we wrap each call with
+            # periodic heartbeat comments to keep the connection alive.
             import math
             total_batches = math.ceil(total_results / batch_size)
             batch_reports = []
             _sync_timeout = min(_timeout, 300)  # per-batch timeout cap at 5 min
+
+            async def _batch_with_heartbeat(prompt_str, label):
+                """Run call_llm_sync but yield SSE heartbeats every 30s.
+                Yields heartbeat comments, then yields a single {'type':'_batch_result','text':...}."""
+                task = asyncio.create_task(call_llm_sync(
+                    llm_cfg["base_url"],
+                    api_key or llm_cfg.get("api_key", ""),
+                    llm_cfg["model"],
+                    [{"role": "user", "content": prompt_str}],
+                    temperature=0.3,
+                    max_tokens=min(_max_tokens, 4096),
+                    timeout=_sync_timeout,
+                ))
+                try:
+                    while not task.done():
+                        done, _ = await asyncio.wait({task}, timeout=30)
+                        if not done:
+                            yield f": heartbeat {label}\n\n"
+                    text, usage = task.result()
+                    yield json.dumps({"type": "_batch_result", "text": text}) + "\n"
+                except Exception:
+                    task.cancel()
+                    raise
 
             for b_idx in range(total_batches):
                 start = b_idx * batch_size
@@ -1111,17 +1137,17 @@ async def full_rca_stream(
                     batch_idx=b_idx + 1, total_batches=total_batches,
                 )
 
-                text, _usage = await call_llm_sync(
-                    llm_cfg["base_url"],
-                    api_key or llm_cfg.get("api_key", ""),
-                    llm_cfg["model"],
-                    [{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                    max_tokens=min(_max_tokens, 4096),
-                    timeout=_sync_timeout,
-                )
+                # Consume heartbeat generator; last item is the result
+                batch_text = ""
+                async for chunk in _batch_with_heartbeat(prompt, f"batch {b_idx+1}/{total_batches}"):
+                    if chunk.startswith(": "):
+                        yield chunk  # forward heartbeat
+                    elif chunk.startswith("{") and '"_batch_result"' in chunk:
+                        batch_text = json.loads(chunk)["text"]
+                    else:
+                        yield chunk  # forward anything else (status etc)
                 batch_reports.append(
-                    f"### 第 {b_idx + 1} 批（{len(batch)} 個檔案，RRF #{start + 1}~#{start + len(batch)}）\n\n{text}"
+                    f"### 第 {b_idx + 1} 批（{len(batch)} 個檔案，RRF #{start + 1}~#{start + len(batch)}）\n\n{batch_text}"
                 )
 
             # ── Phase B: Synthesis (stream to frontend) ──
