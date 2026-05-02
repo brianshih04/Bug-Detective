@@ -519,17 +519,19 @@
           analysisContent.innerHTML = '';
         }
         analysisRawText += (evt.text || '');
-        // Throttle rendering: skip if previous render is still pending
-        if (!analysisContent._renderPending) {
-          analysisContent._renderPending = true;
-          requestAnimationFrame(function() {
-            analysisContent.innerHTML = renderMarkdown(analysisRawText);
-            analysisContent._renderPending = false;
-          });
+        // During streaming: just append text (fast, no markdown parsing)
+        if (analysisContent._streamMode !== true) {
+          analysisContent._streamMode = true;
+          analysisContent.innerHTML = '';
+          var pre = document.createElement('pre');
+          pre.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;font-family:inherit;line-height:1.7;margin:0;padding:1rem;';
+          pre.className = 'stream-raw-text';
+          analysisContent.appendChild(pre);
         }
-        analysisContent.classList.remove('streaming-cursor');
-        if (isAnalyzing) analysisContent.classList.add('streaming-cursor');
-        // Auto-scroll analysis
+        var pre = analysisContent.querySelector('.stream-raw-text');
+        if (pre) pre.textContent = analysisRawText;
+        analysisContent.classList.add('streaming-cursor');
+        // Auto-scroll
         var panel = analysisContent.closest('.result-panel');
         if (panel) panel.scrollTop = panel.scrollHeight;
         break;
