@@ -1097,10 +1097,10 @@ async def full_rca_stream(
             batch_reports = []
             _sync_timeout = min(_timeout, 300)  # per-batch timeout cap at 5 min
 
-            async def _batch_with_heartbeat(prompt_str, label):
-                """Run call_llm_sync but yield SSE heartbeats every 30s.
-                Yields heartbeat comments, then yields a single {'type':'_batch_result','text':...}."""
-                task = asyncio.create_task(call_llm_sync(
+            async def _batch_stream(prompt_str, label):
+                """Stream batch analysis: forward thinking to frontend, collect content silently."""
+                batch_chunks = []
+                async for chunk in call_llm_stream(
                     llm_cfg["base_url"],
                     api_key or llm_cfg.get("api_key", ""),
                     llm_cfg["model"],
@@ -1108,17 +1108,20 @@ async def full_rca_stream(
                     temperature=0.3,
                     max_tokens=min(_max_tokens, 4096),
                     timeout=_sync_timeout,
-                ))
-                try:
-                    while not task.done():
-                        done, _ = await asyncio.wait({task}, timeout=30)
-                        if not done:
-                            yield f": heartbeat {label}\n\n"
-                    text, usage = task.result()
-                    yield json.dumps({"type": "_batch_result", "text": text}) + "\n"
-                except Exception:
-                    task.cancel()
-                    raise
+                ):
+                    if chunk.startswith("{"):
+                        try:
+                            evt = json.loads(chunk)
+                            if evt.get("type") == "thinking":
+                                yield chunk  # forward thinking to frontend
+                            elif evt.get("type") == "content":
+                                batch_chunks.append(evt.get("text", ""))
+                            elif evt.get("type") == "token_usage":
+                                yield chunk  # forward token usage
+                        except json.JSONDecodeError:
+                            pass
+                # Yield collected content as internal event
+                yield json.dumps({"type": "_batch_result", "text": "".join(batch_chunks)}) + "\n"
 
             for b_idx in range(total_batches):
                 start = b_idx * batch_size
@@ -1137,15 +1140,13 @@ async def full_rca_stream(
                     batch_idx=b_idx + 1, total_batches=total_batches,
                 )
 
-                # Consume heartbeat generator; last item is the result
+                # Stream batch: thinking goes to frontend, content collected silently
                 batch_text = ""
-                async for chunk in _batch_with_heartbeat(prompt, f"batch {b_idx+1}/{total_batches}"):
-                    if chunk.startswith(": "):
-                        yield chunk  # forward heartbeat
-                    elif chunk.startswith("{") and '"_batch_result"' in chunk:
+                async for chunk in _batch_stream(prompt, f"batch {b_idx+1}/{total_batches}"):
+                    if chunk.startswith("{") and '"_batch_result"' in chunk:
                         batch_text = json.loads(chunk)["text"]
                     else:
-                        yield chunk  # forward anything else (status etc)
+                        yield chunk  # forward thinking/token_usage to frontend
                 batch_reports.append(
                     f"### 第 {b_idx + 1} 批（{len(batch)} 個檔案，RRF #{start + 1}~#{start + len(batch)}）\n\n{batch_text}"
                 )
