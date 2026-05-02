@@ -41,8 +41,8 @@ class LLMConfigRequest(BaseModel):
     api_key: str = ""
     model: str = ""
     provider: str = ""
-    max_tokens: int = 4096
-    timeout: int = 300
+    max_tokens: int = 16000
+    timeout: int = 600
 
 class FetchModelsRequest(BaseModel):
     base_url: str
@@ -50,6 +50,14 @@ class FetchModelsRequest(BaseModel):
 
 class SanitizeRequest(BaseModel):
     text: str = ""
+
+class AnalyzeRequest(BaseModel):
+    log_text: str
+    bug_description: str = ""
+    api_key: str = ""  # passed from client, never persisted
+    top_k: int = 20  # number of search results for RCA
+    max_tokens: int = 0  # 0 = use server default from llm-config
+    timeout: int = 0  # 0 = use server default from llm-config
 
 # --- App lifespan ---
 @asynccontextmanager

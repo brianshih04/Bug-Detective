@@ -795,8 +795,8 @@
           base_url: cfgBaseUrl.value.trim(),
           model: cfgModel.value.trim(),
           provider: cfgProvider.value,
-          max_tokens: parseInt(cfgMaxTokens.value) || 4096,
-          timeout: parseInt(cfgTimeout.value) || 300,
+          max_tokens: parseInt(cfgMaxTokens.value) || 16000,
+          timeout: parseInt(cfgTimeout.value) || 600,
         })
       });
       if (res.ok) {
