@@ -135,6 +135,54 @@ def get_retriever(similarity_top_k: int = 10):
     return index.as_retriever(similarity_top_k=similarity_top_k)
 
 
+# ---------------------------------------------------------------------------
+# Inverted index for keyword_search (built once at startup)
+# ---------------------------------------------------------------------------
+# {lowercased_word: [(rel_path, line_no, line_text), ...]}
+_KEYWORD_INDEX: dict[str, list[tuple[str, int, str]]] | None = None
+
+_CPP_SUFFIXES = frozenset({
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx",
+})
+
+def _build_keyword_index(source_dir: str = SOURCE_DIR) -> dict[str, list[tuple[str, int, str]]]:
+    """Scan all C/C++ files once and build an in-memory inverted index."""
+    index: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
+    root = Path(source_dir)
+    if not root.exists():
+        return dict(index)
+
+    scanned = 0
+    t0 = time.time()
+    for fpath in root.rglob("*"):
+        if not fpath.is_file() or fpath.suffix.lower() not in _CPP_SUFFIXES:
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        rel = str(fpath.relative_to(root))
+        for i, line in enumerate(content.split("\n"), 1):
+            # Extract alphanumeric tokens (>= 2 chars)
+            for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", line):
+                lw = word.lower()
+                index[lw].append((rel, i, line.strip()[:200]))
+        scanned += 1
+
+    elapsed = time.time() - t0
+    print(f"[keyword-index] Built index: {scanned} files, "
+          f"{len(index)} unique tokens, {elapsed:.1f}s")
+    return dict(index)
+
+
+def get_keyword_index() -> dict[str, list[tuple[str, int, str]]]:
+    """Lazy-init and return the global keyword index."""
+    global _KEYWORD_INDEX
+    if _KEYWORD_INDEX is None:
+        _KEYWORD_INDEX = _build_keyword_index()
+    return _KEYWORD_INDEX
+
+
 # =========================================================================
 # STEP 0: Rule-based Log Filtering & Deduplication
 # =========================================================================
@@ -574,7 +622,7 @@ async def vector_search(query: str, top_k: int = 15) -> list[dict]:
 async def keyword_search(
     keywords: list[str], source_dir: str = SOURCE_DIR, max_results: int = 15,
 ) -> list[dict]:
-    """Search source code using grep for exact keyword matches."""
+    """Search source code using inverted index (built once at startup)."""
     results = []
     seen_files = {}  # file_path → best rank
 
@@ -582,38 +630,51 @@ async def keyword_search(
     if not root.exists():
         return []
 
-    for kw in keywords[:10]:  # limit to 10 keywords to avoid flooding
-        kw_safe = re.escape(kw)
+    kw_index = get_keyword_index()
+
+    for kw in keywords[:10]:  # limit to 10 keywords
         try:
-            loop = asyncio.get_event_loop()
+            # Tokenize keyword and look up each token in the index
+            kw_tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", kw)
+            if not kw_tokens:
+                continue
 
-            def _grep():
-                matches = []
-                for fpath in root.rglob("*"):
-                    if not fpath.is_file():
-                        continue
-                    if fpath.suffix.lower() not in {
-                        ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx",
-                    }:
-                        continue
-                    try:
-                        content = fpath.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        continue
-                    for i, line in enumerate(content.split("\n"), 1):
-                        if re.search(kw_safe, line, re.IGNORECASE):
-                            rel = str(fpath.relative_to(root))
-                            matches.append((rel, i, line.strip()[:200], fpath.name))
-                            if len(matches) >= 5:
-                                return matches
-                return matches
+            # Gather candidate matches from index lookup
+            # Each token returns a list of (rel_path, line_no, line_text)
+            candidate_sets: list[list[tuple[str, int, str]]] = []
+            for token in kw_tokens:
+                hits = kw_index.get(token.lower(), [])
+                if hits:
+                    candidate_sets.append(hits)
 
-            matches = await loop.run_in_executor(None, _grep)
+            if not candidate_sets:
+                continue
 
-            for rel_path, line_no, line_text, fname in matches:
+            # Intersect: a match is valid only if ALL tokens appear on the same line
+            # Start with the smallest set for efficiency
+            candidate_sets.sort(key=len)
+            base_set = candidate_sets[0]
+            for extra_set in candidate_sets[1:]:
+                # Build lookup: {(rel_path, line_no)} for fast intersection
+                extra_lookup = {(r, ln) for r, ln, _ in extra_set}
+                base_set = [
+                    (r, ln, lt) for r, ln, lt in base_set
+                    if (r, ln) in extra_lookup
+                ]
+
+            # Verify full keyword regex on matched lines (catch partial / case mismatches)
+            kw_safe = re.escape(kw)
+            matches = []
+            for rel_path, line_no, line_text in base_set:
+                if re.search(kw_safe, line_text, re.IGNORECASE):
+                    matches.append((rel_path, line_no, line_text))
+                    if len(matches) >= 5:
+                        break
+
+            # Read surrounding context from disk (same as before)
+            for rel_path, line_no, line_text in matches:
                 if rel_path not in seen_files or seen_files[rel_path] > len(results):
                     seen_files[rel_path] = len(results)
-                    # Read surrounding context
                     fpath = root / rel_path
                     try:
                         content = fpath.read_text(encoding="utf-8", errors="replace")
@@ -626,7 +687,7 @@ async def keyword_search(
 
                     results.append({
                         "file_path": rel_path,
-                        "file_name": fname,
+                        "file_name": Path(rel_path).name,
                         "language": "c" if rel_path.endswith((".c", ".h")) else "cpp",
                         "start_line": start + 1,
                         "end_line": end,
