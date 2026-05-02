@@ -45,7 +45,7 @@ VECTOR_SEARCH_TIMEOUT = 30  # seconds
 RRF_K = 60  # Reciprocal Rank Fusion constant
 DEFAULT_BATCH_SIZE = 20  # Step 4 batch size
 PER_BATCH_TIMEOUT_CAP = 300  # 5 min cap per-batch in Step 4
-LOG_CHUNK_SIZE = 16000  # chars per log chunk for chunked LLM parsing
+LOG_CHUNK_SIZE = 64000  # chars per log chunk for chunked LLM parsing
 LOG_CHUNK_OVERLAP_LINES = 5  # overlap lines between chunks for context continuity
 
 
@@ -796,6 +796,46 @@ def _parse_llm_json_response(resp: str) -> dict:
     return {}
 
 
+async def _stream_and_collect(base_url, api_key, model, messages, **kwargs):
+    """Stream an LLM call, forwarding thinking events and collecting content.
+
+    Yields SSE event strings (thinking, token_usage).
+    Final yield: {"type": "_collected", "text": "full collected content"}
+    """
+    collected = []
+    async for chunk in call_llm_stream(base_url, api_key, model, messages, **kwargs):
+        if chunk.startswith("{"):
+            try:
+                evt = json.loads(chunk)
+                if evt.get("type") == "thinking":
+                    yield chunk
+                elif evt.get("type") == "content":
+                    collected.append(evt.get("text", ""))
+                elif evt.get("type") == "token_usage":
+                    yield chunk
+            except json.JSONDecodeError:
+                pass
+    yield json.dumps({"type": "_collected", "text": "".join(collected)}) + "\n"
+
+
+def _fallback_keywords_from_chunks(
+    all_keywords: list[str], all_patterns: list[str], bug_desc: str
+) -> dict:
+    """Fallback: collect all keywords from chunks when LLM synthesis fails."""
+    seen: set[str] = set()
+    exact: list[str] = []
+    for kw in all_keywords:
+        kw_l = kw.lower()
+        if kw_l not in seen and len(exact) < 20:
+            seen.add(kw_l)
+            exact.append(kw)
+    return {
+        "exact": exact,
+        "semantic": all_patterns[:20],
+        "summary": bug_desc[:100],
+    }
+
+
 async def _parse_single_chunk(chunk_idx: int, total_chunks: int, chunk_text: str, bug_desc: str) -> dict:
     """Parse a single log chunk using local Ollama LLM.
 
@@ -1457,7 +1497,7 @@ async def full_rca_stream(
         + "\n"
     )
 
-    # Parse each chunk with LLM
+    # Parse each chunk with LLM (streaming: forward thinking to prevent Cloudflare timeout)
     chunk_results: list[dict] = []
     for ci, chunk_text in enumerate(chunks):
         yield (
@@ -1469,7 +1509,20 @@ async def full_rca_stream(
             )
             + "\n"
         )
-        cr = await _parse_single_chunk(ci, n_chunks, chunk_text, bug_desc)
+        prompt = _PARSE_LOG_CHUNK_PROMPT.format(
+            chunk_idx=ci + 1, total_chunks=n_chunks, bug_desc=bug_desc, chunk_text=chunk_text,
+        )
+        collected = ""
+        async for evt in _stream_and_collect(
+            OLLAMA_URL + "/v1", "", OLLAMA_MODEL,
+            [{"role": "user", "content": prompt}],
+            temperature=0.1, max_tokens=4096, timeout=300,
+        ):
+            if '"_collected"' in evt:
+                collected = json.loads(evt)["text"]
+            else:
+                yield evt  # forward thinking/token_usage to frontend
+        cr = _parse_llm_json_response(collected) if collected.strip() else {}
         chunk_results.append(cr)
         n_events = len(cr.get("events", []))
         n_kws = len(cr.get("keywords", []))
@@ -1505,7 +1558,7 @@ async def full_rca_stream(
     )
     step_start = time.time()
 
-    # ── Step 2: Synthesize chunk results ─────────────────────────
+    # ── Step 2: Synthesize chunk results (streaming: forward thinking) ──
     yield _step_event(2, "active", elapsed=time.time() - t0)
     yield (
         json.dumps(
@@ -1517,7 +1570,65 @@ async def full_rca_stream(
         + "\n"
     )
 
-    expanded = await _synthesize_chunk_results(chunk_results, bug_desc)
+    # Build chunk summaries for synthesis prompt (same logic as _synthesize_chunk_results)
+    summaries = []
+    all_keywords: list[str] = []
+    all_patterns: list[str] = []
+    for i, cr in enumerate(chunk_results):
+        if not cr:
+            continue
+        events = cr.get("events", [])
+        kws = cr.get("keywords", [])
+        pats = cr.get("patterns", [])
+        event_descs = [f"  - [{e.get('severity', '?')}] {e.get('desc', '')}" for e in events[:5]]
+        summary_lines = [f"片段 {i + 1}:"]
+        if event_descs:
+            summary_lines.append("事件:\n" + "\n".join(event_descs))
+        if kws:
+            summary_lines.append(f"關鍵字: {', '.join(kws[:15])}")
+        if pats:
+            summary_lines.append(f"模式: {', '.join(pats[:10])}")
+        summaries.append("\n".join(summary_lines))
+        all_keywords.extend(kws)
+        all_patterns.extend(pats)
+
+    if summaries:
+        chunk_summaries_text = "\n\n".join(summaries)
+        syn_prompt = _SYNTHESIZE_CHUNKS_PROMPT.format(
+            bug_desc=bug_desc,
+            chunk_summaries=chunk_summaries_text,
+            total_chunks=len(chunk_results),
+        )
+        syn_messages = [{"role": "user", "content": syn_prompt}]
+        syn_collected = ""
+        syn_usage = {}
+        async for evt in _stream_and_collect(
+            OLLAMA_URL + "/v1", "", OLLAMA_MODEL, syn_messages,
+            temperature=0.1, max_tokens=4096, timeout=300,
+        ):
+            if '"_collected"' in evt:
+                syn_collected = json.loads(evt)["text"]
+            elif '"token_usage"' in evt:
+                syn_usage = json.loads(evt)
+                yield evt
+            else:
+                yield evt  # forward thinking to frontend
+
+        if syn_collected.strip():
+            parsed = _parse_llm_json_response(syn_collected)
+            if parsed:
+                expanded = {
+                    "exact": parsed.get("exact", [])[:20],
+                    "semantic": parsed.get("semantic", [])[:20],
+                    "summary": parsed.get("summary", bug_desc[:100]),
+                    "usage": syn_usage or {},
+                }
+            else:
+                expanded = _fallback_keywords_from_chunks(all_keywords, all_patterns, bug_desc)
+        else:
+            expanded = _fallback_keywords_from_chunks(all_keywords, all_patterns, bug_desc)
+    else:
+        expanded = {"exact": [], "semantic": [], "summary": bug_desc[:100]}
 
     # Emit token usage for Step 2
     step2_usage = expanded.get("usage", {})
