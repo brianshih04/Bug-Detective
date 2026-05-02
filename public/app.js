@@ -211,6 +211,27 @@
     $('batchSizeSelect').value = savedBatchSize;
   }
 
+  // Restore font size from localStorage
+  var savedFontSize = localStorage.getItem('bugDetective_fontSize');
+  if (savedFontSize) {
+    document.documentElement.style.fontSize = savedFontSize + 'px';
+    var slider = $('cfgFontSize');
+    if (slider) { slider.value = savedFontSize; }
+    var label = $('fontSizeValue');
+    if (label) { label.textContent = savedFontSize + 'px'; }
+  }
+
+  // Font size slider live preview
+  var fontSizeSlider = $('cfgFontSize');
+  if (fontSizeSlider) {
+    fontSizeSlider.addEventListener('input', function() {
+      var size = this.value;
+      document.documentElement.style.fontSize = size + 'px';
+      var label = $('fontSizeValue');
+      if (label) { label.textContent = size + 'px'; }
+    });
+  }
+
   // ===== SKELETON HELPERS =====
   function showSearchSkeleton() {
     searchCard.classList.remove('hidden');
@@ -332,6 +353,7 @@
 
       localStorage.setItem('bugDetective_topK', $('topKSelect').value);
       localStorage.setItem('bugDetective_batchSize', $('batchSizeSelect').value);
+      localStorage.setItem('bugDetective_fontSize', $('cfgFontSize').value);
 
       if (!res.ok) {
         throw new Error('HTTP ' + res.status);
