@@ -4,6 +4,7 @@ This file contains the JS renderMarkdown function extracted for testing.
 We evaluate it via a minimal JS runtime approach: extract the function
 and test with known XSS payloads.
 """
+
 import json
 import subprocess
 
@@ -58,10 +59,7 @@ function renderMarkdown(text) {
 def _run_js(input_text):
     """Run renderMarkdown via Node.js and return the result."""
     full_js = RENDER_MD_JS + "\nconsole.log(JSON.stringify(renderMarkdown(" + json.dumps(input_text) + ")));"
-    result = subprocess.run(
-        ["node", "-e", full_js],
-        capture_output=True, text=True, timeout=5
-    )
+    result = subprocess.run(["node", "-e", full_js], capture_output=True, text=True, timeout=5)
     if result.returncode != 0:
         raise RuntimeError(f"JS error: {result.stderr}")
     return json.loads(result.stdout.strip())
@@ -90,7 +88,7 @@ class TestRenderMarkdownXSS:
 
     def test_link_text_html_escaped(self):
         """HTML in link text should be escaped, so no actual tags are injected."""
-        html = _run_js('[<img src=x onerror=alert(1)>](http://example.com)')
+        html = _run_js("[<img src=x onerror=alert(1)>](http://example.com)")
         # The text is inside an <a> tag, but <img> should NOT be a real tag
         assert "<img" not in html
         # onerror appears in escaped text but is harmless (inside &lt;&gt;)
@@ -101,7 +99,7 @@ class TestRenderMarkdownXSS:
     def test_link_url_attribute_injection_blocked(self):
         """Double-quote in URL should be escaped to &quot;, preventing real attribute injection."""
         html = _run_js('[click](foo" onmouseover="alert(1))')
-        assert '&quot;' in html
+        assert "&quot;" in html
         # onmouseover may appear in the escaped text but is inside &quot; so it's harmless
         # The key check: the href attribute value is properly escaped
         assert 'href="foo&quot;' in html

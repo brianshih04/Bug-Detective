@@ -1,4 +1,5 @@
 """Tests for backend/server.py — API endpoints, security headers, API key handling."""
+
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ def _clear_config_cache():
     _LLM_CONFIG_CACHE["data"] = None
     _LLM_CONFIG_CACHE["mtime"] = 0.0
     yield
+
 
 client = TestClient(app)
 
@@ -107,18 +109,24 @@ class TestAnalyzeRequestValidation:
     def test_log_text_too_large(self):
         """log_text exceeding 2MB should be rejected."""
         huge_log = "x" * 2_000_001
-        res = client.post("/api/analyze", json={
-            "log_text": huge_log,
-            "bug_description": "test",
-        })
+        res = client.post(
+            "/api/analyze",
+            json={
+                "log_text": huge_log,
+                "bug_description": "test",
+            },
+        )
         assert res.status_code == 422
 
     def test_log_text_within_limit(self):
         """Normal-sized log_text should pass validation (may fail for other reasons)."""
-        res = client.post("/api/analyze", json={
-            "log_text": "some log content",
-            "bug_description": "test",
-        })
+        res = client.post(
+            "/api/analyze",
+            json={
+                "log_text": "some log content",
+                "bug_description": "test",
+            },
+        )
         # Should NOT be a 422 validation error
         assert res.status_code != 422
 
@@ -159,6 +167,7 @@ class TestRateLimiting:
     def _reset_rate_limits(self):
         """Clear rate limit state between tests."""
         from backend.server import _RATE_LIMITS
+
         _RATE_LIMITS.clear()
         yield
 
@@ -181,9 +190,7 @@ class TestSearchEndpoint:
     @patch("backend.rca.keyword_search")
     def test_search_calls_simple_keyword_search(self, mock_kw):
         """POST /api/search should return keyword results without API key."""
-        mock_kw.return_value = [
-            {"file": "main.c", "line": 42, "text": "error here", "score": 1.0, "source": "keyword"}
-        ]
+        mock_kw.return_value = [{"file": "main.c", "line": 42, "text": "error here", "score": 1.0, "source": "keyword"}]
         res = client.post("/api/search", json={"query": "segfault crash", "top_k": 5})
         assert res.status_code == 200
         data = res.json()

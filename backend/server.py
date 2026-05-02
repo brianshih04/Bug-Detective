@@ -1,4 +1,5 @@
 """Bug-Detective FastAPI Server with LlamaIndex RAG."""
+
 import subprocess
 import sys
 import time
@@ -48,9 +49,11 @@ class AnalyzeRequest(BaseModel):
             raise ValueError(f"log_text too large ({len(v):,} chars, max {max_len:,})")
         return v
 
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 10
+
 
 class LLMConfigRequest(BaseModel):
     base_url: str = ""
@@ -60,12 +63,15 @@ class LLMConfigRequest(BaseModel):
     max_tokens: int = 16000
     timeout: int = 600
 
+
 class FetchModelsRequest(BaseModel):
     base_url: str
     api_key: str = ""
 
+
 class SanitizeRequest(BaseModel):
     text: str = ""
+
 
 # --- App lifespan ---
 @asynccontextmanager
@@ -86,7 +92,9 @@ async def lifespan(app: FastAPI):
     print("Shutting down...")
     await close_shared_clients()
 
+
 app = FastAPI(title="Bug-Detective", version="2.0", lifespan=lifespan)
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -97,6 +105,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
+
 
 # --- CORS ---
 app.add_middleware(
@@ -116,10 +125,11 @@ app.add_middleware(
 
 # --- Rate limiting (in-memory sliding window) ---
 _RATE_LIMITS = defaultdict(list)  # ip → [timestamps]
-_RATE_WINDOW = 60          # seconds
-_RATE_MAX_REQUESTS = 30    # per window per IP
+_RATE_WINDOW = 60  # seconds
+_RATE_MAX_REQUESTS = 30  # per window per IP
 _RATE_ANALYZE_WINDOW = 120
-_RATE_MAX_ANALYZE = 5      # analyze is expensive
+_RATE_MAX_ANALYZE = 5  # analyze is expensive
+
 
 def _check_rate_limit(ip: str, window: int, max_req: int) -> bool:
     """Return True if request should be allowed."""
@@ -132,9 +142,11 @@ def _check_rate_limit(ip: str, window: int, max_req: int) -> bool:
     _RATE_LIMITS[ip].append(now)
     return True
 
+
 # --- Static files ---
 if PUBLIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(PUBLIC_DIR)), name="static")
+
 
 @app.get("/")
 async def serve_index():
@@ -143,19 +155,32 @@ async def serve_index():
         return FileResponse(str(index_path), media_type="text/html")
     return JSONResponse({"error": "Frontend not built"}, status_code=404)
 
+
 # --- API Routes ---
 def _git_version():
     """Get short git commit hash and dirty flag."""
     try:
         base = Path(__file__).parent.parent
-        rev = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(base), stderr=subprocess.DEVNULL, timeout=5,
-        ).decode().strip()
-        status = subprocess.check_output(
-            ["git", "diff", "--name-only", "HEAD"],
-            cwd=str(base), stderr=subprocess.DEVNULL, timeout=5,
-        ).decode().strip()
+        rev = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(base),
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            .decode()
+            .strip()
+        )
+        status = (
+            subprocess.check_output(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=str(base),
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            .decode()
+            .strip()
+        )
         dirty = "*" if status else ""
         return f"v2.0-{rev}{dirty}"
     except Exception:
@@ -168,6 +193,7 @@ APP_VERSION = _git_version()
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": APP_VERSION}
+
 
 @app.get("/api/repos/status")
 async def repos_status(request: Request):
@@ -183,10 +209,12 @@ async def repos_status(request: Request):
     except Exception as e:
         return {"collection": COLLECTION_NAME, "error": str(e), "vectors": 0}
 
+
 @app.post("/api/search")
 async def search(req: SearchRequest):
     results = await simple_keyword_search(req.query, top_k=req.top_k)
     return {"query": req.query, "results": results, "count": len(results)}
+
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest, request: Request):
@@ -194,11 +222,16 @@ async def analyze(req: AnalyzeRequest, request: Request):
     client_ip = request.client.host if request.client else "unknown"
     if not _check_rate_limit(client_ip, _RATE_ANALYZE_WINDOW, _RATE_MAX_ANALYZE):
         raise HTTPException(429, f"Rate limit: max {_RATE_MAX_ANALYZE} analyze requests per {_RATE_ANALYZE_WINDOW}s")
+
     async def event_stream() -> AsyncGenerator[str, None]:
         async for chunk in full_rca_stream(
-            req.log_text, req.bug_description, req.api_key,
-            top_k=req.top_k, batch_size=req.batch_size,
-            max_tokens=req.max_tokens, timeout=req.timeout,
+            req.log_text,
+            req.bug_description,
+            req.api_key,
+            top_k=req.top_k,
+            batch_size=req.batch_size,
+            max_tokens=req.max_tokens,
+            timeout=req.timeout,
         ):
             yield chunk
 
@@ -207,6 +240,7 @@ async def analyze(req: AnalyzeRequest, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 # --- LLM Config ---
 @app.get("/api/llm-config")
@@ -217,6 +251,7 @@ async def get_llm_config():
         cfg["api_key_set"] = True
         cfg["api_key"] = ""
     return cfg
+
 
 @app.put("/api/llm-config")
 async def put_llm_config(req: LLMConfigRequest):
@@ -230,6 +265,7 @@ async def put_llm_config(req: LLMConfigRequest):
         cfg["api_key"] = ""
     return cfg
 
+
 @app.get("/api/llm-presets")
 async def get_presets():
     presets = {}
@@ -241,12 +277,14 @@ async def get_presets():
         presets[k] = p
     return presets
 
+
 @app.post("/api/llm-config/preset/{provider}")
 async def apply_preset(provider: str):
     if provider not in LLM_PRESETS:
         raise HTTPException(404, f"Unknown preset: {provider}")
     cfg = save_llm_config(LLM_PRESETS[provider])
     return cfg
+
 
 @app.get("/api/models")
 async def list_models():
@@ -282,8 +320,8 @@ async def fetch_models(req: FetchModelsRequest):
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             candidates = [
-                api_root + "/models",       # OpenAI-compatible (works for most)
-                api_root + "/api/tags",     # Ollama
+                api_root + "/models",  # OpenAI-compatible (works for most)
+                api_root + "/api/tags",  # Ollama
             ]
             for models_url in candidates:
                 try:
@@ -309,11 +347,14 @@ async def fetch_models(req: FetchModelsRequest):
 
     return {"models": models, "source": source}
 
+
 # --- Security ---
 @app.post("/api/sanitize")
 async def test_sanitize(req: SanitizeRequest):
     return {"original": req.text, "sanitized": sanitize_for_cloud(req.text)}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("backend.server:app", host="0.0.0.0", port=PORT, reload=False)

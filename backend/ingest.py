@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Ingestion pipeline: Tree-sitter AST parsing → LlamaIndex CodeSplitter → Qdrant."""
+
 import sys
 import time
 from pathlib import Path
@@ -19,10 +20,12 @@ C_EXTENSIONS = {".c", ".h"}
 CPP_EXTENSIONS = {".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".hh", ".ipp"}
 ALL_EXTENSIONS = C_EXTENSIONS | CPP_EXTENSIONS
 
+
 # --- Embedding setup ---
 def get_embedding_dim() -> int:
     """Get embedding dimension for the model."""
     return EMBEDDING_DIM
+
 
 def get_language(path: Path) -> str:
     """Detect C or C++ from file extension."""
@@ -30,6 +33,7 @@ def get_language(path: Path) -> str:
     if ext in CPP_EXTENSIONS:
         return "cpp"
     return "c"
+
 
 def walk_source_files(source_dir: str) -> list[Path]:
     """Walk directory and collect source files."""
@@ -50,6 +54,7 @@ def walk_source_files(source_dir: str) -> list[Path]:
         if path.suffix.lower() in ALL_EXTENSIONS:
             files.append(path)
     return sorted(files)
+
 
 def create_documents(files: list[Path], source_dir: str) -> list[Document]:
     """Create LlamaIndex Documents with metadata."""
@@ -72,7 +77,7 @@ def create_documents(files: list[Path], source_dir: str) -> list[Document]:
         lang = get_language(fpath)
 
         # Count lines for metadata
-        lines = content.count('\n') + 1
+        lines = content.count("\n") + 1
 
         doc = Document(
             text=content,
@@ -89,6 +94,7 @@ def create_documents(files: list[Path], source_dir: str) -> list[Document]:
         documents.append(doc)
 
     return documents, skipped
+
 
 def build_index(documents: list[Document], batch_size: int = 100):
     """Build Qdrant vector index from documents."""
@@ -149,6 +155,7 @@ def build_index(documents: list[Document], batch_size: int = 100):
 
     return index
 
+
 def main():
     print("=" * 60)
     print("Bug-Detective: LlamaIndex Ingestion Pipeline")
@@ -172,6 +179,7 @@ def main():
     build_index(documents)
 
     print("\n✅ Done!")
+
 
 if __name__ == "__main__":
     main()

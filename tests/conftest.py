@@ -1,4 +1,5 @@
 """Shared fixtures for bug-detective tests."""
+
 import sys
 import unittest.mock
 from pathlib import Path

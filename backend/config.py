@@ -1,4 +1,5 @@
 """Configuration for bug-detective RAG system."""
+
 import json
 import os
 import time as _time
@@ -8,8 +9,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+
 def _env(name, default=""):
     return os.getenv(name, default)
+
 
 # --- Paths ---
 BASE_DIR = Path(__file__).parent.parent
@@ -48,6 +51,7 @@ DEFAULT_LLM_CONFIG = {
     "timeout": 600,
 }
 
+
 def load_llm_config() -> dict:
     now = _time.monotonic()
     cache = _LLM_CONFIG_CACHE
@@ -70,11 +74,13 @@ def load_llm_config() -> dict:
             return cfg
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             import logging
+
             logging.getLogger(__name__).warning("Failed to load %s: %s", LLM_CONFIG_PATH, e)
     result = dict(DEFAULT_LLM_CONFIG)
     cache["data"] = result
     cache["mtime"] = _time.monotonic()
     return result
+
 
 def save_llm_config(cfg: dict) -> dict:
     LLM_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +90,7 @@ def save_llm_config(cfg: dict) -> dict:
     _LLM_CONFIG_CACHE["data"] = merged
     _LLM_CONFIG_CACHE["mtime"] = _time.monotonic()
     return merged
+
 
 LLM_PRESETS = {
     "ollama": {
@@ -125,5 +132,5 @@ LLM_PRESETS = {
         "provider": "deepseek",
         "max_tokens": 16000,
         "timeout": 600,
-    }
+    },
 }

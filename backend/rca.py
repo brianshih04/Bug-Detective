@@ -5,6 +5,7 @@ Step 2: LLM semantic expansion (Qwen local — synonyms, related modules)
 Step 3: Hybrid search (keyword grep + Qdrant vector → RRF fusion)
 Step 4: Cloud LLM deep analysis (GLM-5 / OpenRouter / MiniMax)
 """
+
 import asyncio
 import json
 import math
@@ -37,12 +38,12 @@ from backend.security import sanitize_for_cloud
 # ---------------------------------------------------------------------------
 # Tuning constants
 # ---------------------------------------------------------------------------
-DEFAULT_TOP_K = 15          # vector & hybrid search results
-KEYWORD_SEARCH_LIMIT = 20   # max keywords per search
+DEFAULT_TOP_K = 15  # vector & hybrid search results
+KEYWORD_SEARCH_LIMIT = 20  # max keywords per search
 VECTOR_SEARCH_TIMEOUT = 30  # seconds
-RRF_K = 60                  # Reciprocal Rank Fusion constant
-DEFAULT_BATCH_SIZE = 20     # Step 4 batch size
-PER_BATCH_TIMEOUT_CAP = 300 # 5 min cap per-batch in Step 4
+RRF_K = 60  # Reciprocal Rank Fusion constant
+DEFAULT_BATCH_SIZE = 20  # Step 4 batch size
+PER_BATCH_TIMEOUT_CAP = 300  # 5 min cap per-batch in Step 4
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ def _chat_url(base_url: str) -> str:
 
 
 _shared_http_client: httpx.AsyncClient | None = None
+
 
 def _get_shared_http_client(timeout: float = 300) -> httpx.AsyncClient:
     """Get or create a shared httpx.AsyncClient with connection pooling."""
@@ -78,8 +80,13 @@ async def close_shared_clients():
 
 
 async def call_llm_stream(
-    base_url: str, api_key: str, model: str, messages: list[dict],
-    temperature: float = 0.3, max_tokens: int = 4096, timeout: float = 120,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    timeout: float = 120,
 ) -> AsyncGenerator[str, None]:
     """Stream LLM response via OpenAI-compatible API (SSE)."""
     headers = {"Content-Type": "application/json"}
@@ -87,14 +94,20 @@ async def call_llm_stream(
         headers["Authorization"] = f"Bearer {api_key}"
 
     payload = {
-        "model": model, "messages": messages,
-        "temperature": temperature, "max_tokens": max_tokens, "stream": True,
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
     }
 
     try:
         client = _get_shared_http_client(timeout)
         async with client.stream(
-            "POST", _chat_url(base_url), json=payload, headers=headers,
+            "POST",
+            _chat_url(base_url),
+            json=payload,
+            headers=headers,
         ) as resp:
             if resp.status_code != 200:
                 body = await resp.aread()
@@ -115,10 +128,7 @@ async def call_llm_stream(
                     chunk = json.loads(data)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     content = delta.get("content", "")
-                    reasoning = (
-                        delta.get("reasoning", "")
-                        or delta.get("reasoning_content", "")
-                    )
+                    reasoning = delta.get("reasoning", "") or delta.get("reasoning_content", "")
                     if reasoning:
                         yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
                         token_count += 1
@@ -134,8 +144,13 @@ async def call_llm_stream(
 
 
 async def call_llm_sync(
-    base_url: str, api_key: str, model: str, messages: list[dict],
-    temperature: float = 0.3, max_tokens: int = 4096, timeout: float = 120,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    timeout: float = 120,
 ) -> tuple[str, dict]:
     """Non-streaming LLM call. Returns (response_text, usage_dict)."""
     headers = {"Content-Type": "application/json"}
@@ -143,8 +158,10 @@ async def call_llm_sync(
         headers["Authorization"] = f"Bearer {api_key}"
 
     payload = {
-        "model": model, "messages": messages,
-        "temperature": temperature, "max_tokens": max_tokens,
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
 
     client = _get_shared_http_client(timeout)
@@ -166,12 +183,14 @@ async def call_llm_sync(
 _RETRIEVER_CACHE: dict[int, object] = {}
 _SHARED_QDRANT_CLIENT: "QdrantClient | None" = None
 
+
 def _get_shared_qdrant_client() -> "QdrantClient":
     """Share a single QdrantClient across all retrievers."""
     global _SHARED_QDRANT_CLIENT
     if _SHARED_QDRANT_CLIENT is None:
         _SHARED_QDRANT_CLIENT = QdrantClient(url=QDRANT_URL)
     return _SHARED_QDRANT_CLIENT
+
 
 def get_retriever(similarity_top_k: int = 10):
     """Get vector retriever from Qdrant (cached by top_k)."""
@@ -184,10 +203,12 @@ def get_retriever(similarity_top_k: int = 10):
     )
     qdrant_client = _get_shared_qdrant_client()
     vector_store = QdrantVectorStore(
-        client=qdrant_client, collection_name=COLLECTION_NAME,
+        client=qdrant_client,
+        collection_name=COLLECTION_NAME,
     )
     index = VectorStoreIndex.from_vector_store(
-        vector_store, embed_model=embed_model,
+        vector_store,
+        embed_model=embed_model,
     )
     retriever = index.as_retriever(similarity_top_k=similarity_top_k)
     _RETRIEVER_CACHE[similarity_top_k] = retriever
@@ -200,9 +221,18 @@ def get_retriever(similarity_top_k: int = 10):
 # {lowercased_word: [(rel_path, line_no, line_text), ...]}
 _KEYWORD_INDEX: dict[str, list[tuple[str, int, str]]] | None = None
 
-_CPP_SUFFIXES = frozenset({
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx",
-})
+_CPP_SUFFIXES = frozenset(
+    {
+        ".c",
+        ".h",
+        ".cpp",
+        ".hpp",
+        ".cc",
+        ".cxx",
+        ".hxx",
+    }
+)
+
 
 def _build_keyword_index(source_dir: str = SOURCE_DIR) -> dict[str, list[tuple[str, int, str]]]:
     """Scan all C/C++ files once and build an in-memory inverted index."""
@@ -229,8 +259,7 @@ def _build_keyword_index(source_dir: str = SOURCE_DIR) -> dict[str, list[tuple[s
         scanned += 1
 
     elapsed = time.time() - t0
-    print(f"[keyword-index] Built index: {scanned} files, "
-          f"{len(index)} unique tokens, {elapsed:.1f}s")
+    print(f"[keyword-index] Built index: {scanned} files, {len(index)} unique tokens, {elapsed:.1f}s")
     return dict(index)
 
 
@@ -249,23 +278,23 @@ def get_keyword_index() -> dict[str, list[tuple[str, int, str]]]:
 # ── Blacklist: known noisy patterns to drop entirely (unless near errors) ──
 _NOISE_PATTERNS = [
     # 定著器/加熱器 毫秒級溫度回報 (heartbeat)
-    re.compile(r'FUSER_FUNC_ShowHeatingInfo'),
+    re.compile(r"FUSER_FUNC_ShowHeatingInfo"),
     # 背景常態輪詢 (FakeAppProc recheck)
-    re.compile(r'_PrnJobMgr_FakeAppProc'),
+    re.compile(r"_PrnJobMgr_FakeAppProc"),
     # 溫濕度感測器重複讀取
-    re.compile(r'TempertureHumidity'),
-    re.compile(r'CalculateHumidity'),
+    re.compile(r"TempertureHumidity"),
+    re.compile(r"CalculateHumidity"),
     # SNMP 網管通訊
-    re.compile(r'\{SNMP\}'),
-    re.compile(r'SNMPSysReadInfo'),
-    re.compile(r'SNMP_TRAP'),
+    re.compile(r"\{SNMP\}"),
+    re.compile(r"SNMPSysReadInfo"),
+    re.compile(r"SNMP_TRAP"),
 ]
 
 # ── Error detection: lines matching these are NEVER dropped ──
 _KEEP_KEYWORDS = re.compile(
-    r'(error|exception|crash|fault|fail|panic|abort|segfault|timeout|'
-    r'warning|warn|fatal|assert|broken|corrupt|overflow|undefined|'
-    r'ERR_|E-|0x[0-9a-fA-F]{4,})',
+    r"(error|exception|crash|fault|fail|panic|abort|segfault|timeout|"
+    r"warning|warn|fatal|assert|broken|corrupt|overflow|undefined|"
+    r"ERR_|E-|0x[0-9a-fA-F]{4,})",
     re.IGNORECASE,
 )
 
@@ -273,16 +302,18 @@ _KEEP_KEYWORDS = re.compile(
 #    Each rule replaces a type of variable data with a fixed placeholder,
 #    so lines that differ only in numbers/timestamps get the same fingerprint.
 _FP_RULES = [
-    (re.compile(r'\(\d+ms\)'),                      '(Xms)'),       # (5169610ms)
-    (re.compile(r'\([\d, ]+\)'),                    '(N)'),          # ( 358, 108, ... )
-    (re.compile(r'T:\s*\d+'),                       'T:N'),          # T: 12345
-    (re.compile(r'msT\(\d+\)'),                    'msT(N)'),       # msT(12345)
-    (re.compile(r'data\d?:0x[0-9a-fA-F]+'),        'dataN:0xN'),    # data1:0x64
-    (re.compile(r'getData:\d+'),                    'getData:N'),    # getData:123
-    (re.compile(r'\b\d{4,}\b'),                     'N'),            # standalone numbers ≥4 digits
-    (re.compile(r'0x[0-9a-fA-F]{2,}'),              '0xN'),          # hex values
-    (re.compile(r'\d{4}[-/]\d{2}[-/]\d{2}[\s_]\d{2}:\d{2}:\d{2}'),  # dates
-     'DATE'),
+    (re.compile(r"\(\d+ms\)"), "(Xms)"),  # (5169610ms)
+    (re.compile(r"\([\d, ]+\)"), "(N)"),  # ( 358, 108, ... )
+    (re.compile(r"T:\s*\d+"), "T:N"),  # T: 12345
+    (re.compile(r"msT\(\d+\)"), "msT(N)"),  # msT(12345)
+    (re.compile(r"data\d?:0x[0-9a-fA-F]+"), "dataN:0xN"),  # data1:0x64
+    (re.compile(r"getData:\d+"), "getData:N"),  # getData:123
+    (re.compile(r"\b\d{4,}\b"), "N"),  # standalone numbers ≥4 digits
+    (re.compile(r"0x[0-9a-fA-F]{2,}"), "0xN"),  # hex values
+    (
+        re.compile(r"\d{4}[-/]\d{2}[-/]\d{2}[\s_]\d{2}:\d{2}:\d{2}"),  # dates
+        "DATE",
+    ),
 ]
 
 
@@ -323,7 +354,7 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
     if not log_text or len(log_text) < 500:
         return log_text
 
-    lines = log_text.split('\n')
+    lines = log_text.split("\n")
     total = len(lines)
 
     # ── Mark protected lines (error context ±5) ──
@@ -337,7 +368,7 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
                     protected.add(j)
 
     # ── Layer 1: Blacklist filter (unless protected) ──
-    after_filter = []       # [(orig_line_index, line_text), ...]
+    after_filter = []  # [(orig_line_index, line_text), ...]
     dropped_by_pattern = Counter()
 
     for i, line in enumerate(lines):
@@ -369,8 +400,8 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
             filtered_protected.add(idx)
 
     # Select which indices to keep
-    FREQ_THRESHOLD = 5     # Min occurrences to trigger sampling
-    MAX_SAMPLES = 12       # Max evenly-spaced samples per pattern (plus first+last)
+    FREQ_THRESHOLD = 5  # Min occurrences to trigger sampling
+    MAX_SAMPLES = 12  # Max evenly-spaced samples per pattern (plus first+last)
 
     keep = set()
 
@@ -410,9 +441,7 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
     for fp in fp_groups:
         if fp_count[fp] <= FREQ_THRESHOLD:
             continue
-        free_kept = sorted(
-            i for i in fp_groups[fp] if i in keep and i not in filtered_protected
-        )
+        free_kept = sorted(i for i in fp_groups[fp] if i in keep and i not in filtered_protected)
         if free_kept:
             first_sample[fp] = free_kept[0]
             last_sample[fp] = free_kept[-1]
@@ -436,22 +465,21 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
     noise_lines = sum(dropped_by_pattern.values())
 
     summary = [
-        '--- Log 去重結果 ---',
-        f'原始: {total:,} 行 → 去重後: {len(output):,} 行 ({reduction:.0f}%)',
+        "--- Log 去重結果 ---",
+        f"原始: {total:,} 行 → 去重後: {len(output):,} 行 ({reduction:.0f}%)",
     ]
     if noise_lines:
-        summary.append(f'黑名單過濾: {noise_lines:,} 行雜訊已刪除')
+        summary.append(f"黑名單過濾: {noise_lines:,} 行雜訊已刪除")
         for pat, cnt in dropped_by_pattern.most_common(5):
-            name = pat.replace('\\', '').replace('(', '').replace(')', '')[:50]
-            summary.append(f'  - {name}: {cnt:,} 行')
+            name = pat.replace("\\", "").replace("(", "").replace(")", "")[:50]
+            summary.append(f"  - {name}: {cnt:,} 行")
     if n_compressed:
         summary.append(
-            f'指紋取樣: {n_compressed} 種高頻模式 '
-            f'(頻率 >{FREQ_THRESHOLD}，每種最多 {MAX_SAMPLES + 2} 筆取樣)'
+            f"指紋取樣: {n_compressed} 種高頻模式 (頻率 >{FREQ_THRESHOLD}，每種最多 {MAX_SAMPLES + 2} 筆取樣)"
         )
-    summary += ['--- 以下為去重後 Log ---', '']
+    summary += ["--- 以下為去重後 Log ---", ""]
 
-    return '\n'.join(summary + output)
+    return "\n".join(summary + output)
 
 
 # =========================================================================
@@ -461,35 +489,35 @@ def condense_log(log_text: str, bug_desc: str = "") -> str:
 _LOG_PATTERNS = {
     "error_codes": [
         # E-0012, ERR_SOMETHING, WARNING_42
-        r'\b(?:E|ERR|ERROR|WARN|WARNING|FATAL|BUG)[-_]?\w{1,30}\b',
+        r"\b(?:E|ERR|ERROR|WARN|WARNING|FATAL|BUG)[-_]?\w{1,30}\b",
         # 0xERR hex error codes
-        r'\b0x[0-9A-Fa-f]{4,16}\b',
+        r"\b0x[0-9A-Fa-f]{4,16}\b",
         # HTTP-like codes
-        r'\b(?:status|code|errno)\s*[=:]\s*(\d{3,5})\b',
+        r"\b(?:status|code|errno)\s*[=:]\s*(\d{3,5})\b",
     ],
     "function_names": [
         # C function calls: funcName(
-        r'\b[a-zA-Z_]\w{1,60}\s*\(',
+        r"\b[a-zA-Z_]\w{1,60}\s*\(",
         # C++ method: Class::method(
-        r'\b[a-zA-Z_]\w{1,40}::{1,3}[a-zA-Z_]\w{1,60}\s*\(',
+        r"\b[a-zA-Z_]\w{1,40}::{1,3}[a-zA-Z_]\w{1,60}\s*\(",
         # #define FUNC macros
-        r'#\s*define\s+([A-Z_]\w{1,40})',
+        r"#\s*define\s+([A-Z_]\w{1,40})",
     ],
     "file_paths": [
         # /path/to/file.c:123
-        r'[/\w\-_.]+\.(?:c|cpp|h|hpp|cc|cxx|hxx|hh|ipp)[:]\d+',
+        r"[/\w\-_.]+\.(?:c|cpp|h|hpp|cc|cxx|hxx|hh|ipp)[:]\d+",
         # "file.c", line 42
         r'["\x27]?[\w\-_./]+\.(?:c|cpp|h|hpp|cc|cxx|hxx|hh|ipp)["\x27]?',
     ],
     "exceptions": [
         # C++ exceptions
-        r'\b(?:exception|throw|catch|Segfault|SIGSEGV|SIGABRT|SIGBUS|SIGFPE)\b',
-        r'\b(?:null\s*pointer|nullptr|dereference|out\s*of\s*bounds|buffer\s*overflow|stack\s*overflow|memory\s*leak|double\s*free|use\s*after\s*free)\b',
+        r"\b(?:exception|throw|catch|Segfault|SIGSEGV|SIGABRT|SIGBUS|SIGFPE)\b",
+        r"\b(?:null\s*pointer|nullptr|dereference|out\s*of\s*bounds|buffer\s*overflow|stack\s*overflow|memory\s*leak|double\s*free|use\s*after\s*free)\b",
         # Assertion failures
-        r'\bassert(?:ion)?\s*(?:failed|failure)?\b',
+        r"\bassert(?:ion)?\s*(?:failed|failure)?\b",
     ],
     "memory_addresses": [
-        r'\b0x[0-9A-Fa-f]{8,16}\b',
+        r"\b0x[0-9A-Fa-f]{8,16}\b",
     ],
 }
 
@@ -521,8 +549,9 @@ def extract_structured_log(log_text: str) -> dict:
         if not line:
             continue
         if re.search(
-            r'\b(error|err|fail|fatal|crash|exception|segfault|abort|panic|warning|warn)\b',
-            line, re.IGNORECASE,
+            r"\b(error|err|fail|fatal|crash|exception|segfault|abort|panic|warning|warn)\b",
+            line,
+            re.IGNORECASE,
         ):
             error_lines.append(line[:300])  # truncate long lines
 
@@ -535,8 +564,11 @@ def extract_structured_log(log_text: str) -> dict:
 # STEP 2: LLM Semantic Expansion (Qwen local)
 # =========================================================================
 async def llm_expand_keywords(
-    structured: dict, bug_desc: str, api_key: str = "",
-    max_tokens: int = 0, timeout: int = 0,
+    structured: dict,
+    bug_desc: str,
+    api_key: str = "",
+    max_tokens: int = 0,
+    timeout: int = 0,
 ) -> dict:
     """Step 2: Use LLM to expand keywords with semantic understanding.
 
@@ -602,8 +634,13 @@ async def llm_expand_keywords(
 
     try:
         resp, usage = await call_llm_sync(
-            base_url, key, model,
-            messages, temperature=0.1, max_tokens=_max_tok, timeout=_timeout,
+            base_url,
+            key,
+            model,
+            messages,
+            temperature=0.1,
+            max_tokens=_max_tok,
+            timeout=_timeout,
         )
         # Handle reasoning models that put answer in reasoning field
         if not resp.strip():
@@ -611,17 +648,17 @@ async def llm_expand_keywords(
         # Parse JSON from response
         resp = resp.strip()
         if resp.startswith("```"):
-            resp = re.sub(r'^```\w*\n?', '', resp)
-            resp = re.sub(r'\n?```$', '', resp)
+            resp = re.sub(r"^```\w*\n?", "", resp)
+            resp = re.sub(r"\n?```$", "", resp)
         # Try to extract JSON object — handle truncated JSON
-        json_match = re.search(r'\{.*\}', resp, re.DOTALL)
+        json_match = re.search(r"\{.*\}", resp, re.DOTALL)
         if json_match:
             resp = json_match.group(0)
             # Fix truncated JSON: close open brackets
-            open_brackets = resp.count('[') - resp.count(']')
-            open_braces = resp.count('{') - resp.count('}')
+            open_brackets = resp.count("[") - resp.count("]")
+            open_braces = resp.count("{") - resp.count("}")
             if open_brackets > 0 or open_braces > 0:
-                resp = resp.rstrip().rstrip(',') + ']' * max(0, open_brackets) + '}' * max(0, open_braces)
+                resp = resp.rstrip().rstrip(",") + "]" * max(0, open_brackets) + "}" * max(0, open_braces)
         expanded = json.loads(resp)
         return {
             "summary": expanded.get("summary", bug_desc[:100]),
@@ -664,23 +701,27 @@ async def vector_search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
 
         results = []
         for node in nodes:
-            results.append({
-                "file_path": node.metadata.get("file_path", "unknown"),
-                "file_name": node.metadata.get("file_name", "unknown"),
-                "language": node.metadata.get("language", "unknown"),
-                "start_line": node.metadata.get("start_line", 0),
-                "end_line": node.metadata.get("end_line", 0),
-                "text": node.text[:800],
-                "score": node.score if hasattr(node, "score") else None,
-                "source": "vector",
-            })
+            results.append(
+                {
+                    "file_path": node.metadata.get("file_path", "unknown"),
+                    "file_name": node.metadata.get("file_name", "unknown"),
+                    "language": node.metadata.get("language", "unknown"),
+                    "start_line": node.metadata.get("start_line", 0),
+                    "end_line": node.metadata.get("end_line", 0),
+                    "text": node.text[:800],
+                    "score": node.score if hasattr(node, "score") else None,
+                    "source": "vector",
+                }
+            )
         return results
     except Exception as e:
         return [{"source": "vector", "error": str(e)}]
 
 
 async def keyword_search(
-    keywords: list[str], source_dir: str = SOURCE_DIR, max_results: int = DEFAULT_TOP_K,
+    keywords: list[str],
+    source_dir: str = SOURCE_DIR,
+    max_results: int = DEFAULT_TOP_K,
 ) -> list[dict]:
     """Search source code using inverted index (built once at startup)."""
     results = []
@@ -718,10 +759,7 @@ async def keyword_search(
             for extra_set in candidate_sets[1:]:
                 # Build lookup: {(rel_path, line_no)} for fast intersection
                 extra_lookup = {(r, ln) for r, ln, _ in extra_set}
-                base_set = [
-                    (r, ln, lt) for r, ln, lt in base_set
-                    if (r, ln) in extra_lookup
-                ]
+                base_set = [(r, ln, lt) for r, ln, lt in base_set if (r, ln) in extra_lookup]
 
             # Verify full keyword regex on matched lines (catch partial / case mismatches)
             kw_safe = re.escape(kw)
@@ -747,17 +785,19 @@ async def keyword_search(
                     except Exception:
                         snippet = line_text
 
-                    results.append({
-                        "file_path": rel_path,
-                        "file_name": Path(rel_path).name,
-                        "language": "c" if rel_path.endswith((".c", ".h")) else "cpp",
-                        "start_line": start + 1,
-                        "end_line": end,
-                        "text": snippet,
-                        "score": 1.0,  # exact match
-                        "source": "keyword",
-                        "matched_keyword": kw,
-                    })
+                    results.append(
+                        {
+                            "file_path": rel_path,
+                            "file_name": Path(rel_path).name,
+                            "language": "c" if rel_path.endswith((".c", ".h")) else "cpp",
+                            "start_line": start + 1,
+                            "end_line": end,
+                            "text": snippet,
+                            "score": 1.0,  # exact match
+                            "source": "keyword",
+                            "matched_keyword": kw,
+                        }
+                    )
                     if len(results) >= max_results:
                         break
         except Exception:
@@ -846,10 +886,12 @@ async def hybrid_search(
 # =========================================================================
 # =========================================================================
 
+
 # Full Pipeline (streaming)
 # =========================================================================
-def _step_event(step: int, state: str, elapsed: float = None, detail: str = "",
-                max_tokens: int = None, timeout: int = None):
+def _step_event(
+    step: int, state: str, elapsed: float = None, detail: str = "", max_tokens: int = None, timeout: int = None
+):
     """Emit an explicit pipeline_step SSE event for the frontend."""
     evt = {"type": "pipeline_step", "step": step, "state": state}
     if elapsed is not None:
@@ -944,8 +986,8 @@ async def _step4_deep_analysis(
 
     safe_summary = sanitize_for_cloud(expanded["summary"])
     safe_desc = sanitize_for_cloud(bug_desc)
-    safe_exact = json.dumps(expanded['exact'], ensure_ascii=False)
-    safe_semantic = json.dumps(expanded['semantic'], ensure_ascii=False)
+    safe_exact = json.dumps(expanded["exact"], ensure_ascii=False)
+    safe_semantic = json.dumps(expanded["semantic"], ensure_ascii=False)
 
     if batch_size > 0 and total_results > batch_size:
         # ── Phase A: Batch analysis (sync, no streaming to frontend) ──
@@ -984,24 +1026,32 @@ async def _step4_deep_analysis(
 
         for b_idx in range(total_batches):
             start = b_idx * batch_size
-            batch = results_to_analyze[start:start + batch_size]
+            batch = results_to_analyze[start : start + batch_size]
             context = sanitize_for_cloud(_build_context(batch))
 
-            yield json.dumps({
-                "type": "status",
-                "text": f"🧩 Step 4: 分析第 {b_idx + 1}/{total_batches} 批（{len(batch)} 個檔案）...",
-            }) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "type": "status",
+                        "text": f"🧩 Step 4: 分析第 {b_idx + 1}/{total_batches} 批（{len(batch)} 個檔案）...",
+                    }
+                )
+                + "\n"
+            )
 
             prompt = _BATCH_ANALYSIS_PROMPT.format(
-                desc=safe_desc, summary=safe_summary,
-                exact=safe_exact, semantic=safe_semantic,
+                desc=safe_desc,
+                summary=safe_summary,
+                exact=safe_exact,
+                semantic=safe_semantic,
                 context=context,
-                batch_idx=b_idx + 1, total_batches=total_batches,
+                batch_idx=b_idx + 1,
+                total_batches=total_batches,
             )
 
             # Stream batch: thinking goes to frontend, content collected silently
             batch_text = ""
-            async for chunk in _batch_stream(prompt, f"batch {b_idx+1}/{total_batches}"):
+            async for chunk in _batch_stream(prompt, f"batch {b_idx + 1}/{total_batches}"):
                 if chunk.startswith("{") and '"_batch_result"' in chunk:
                     batch_text = json.loads(chunk)["text"]
                 else:
@@ -1014,14 +1064,21 @@ async def _step4_deep_analysis(
         all_batch_text = "\n\n---\n\n".join(batch_reports)
         synthesis_context = sanitize_for_cloud(all_batch_text)
 
-        yield json.dumps({
-            "type": "status",
-            "text": f"🔄 Step 4: 統整 {total_batches} 批分析結果...",
-        }) + "\n"
+        yield (
+            json.dumps(
+                {
+                    "type": "status",
+                    "text": f"🔄 Step 4: 統整 {total_batches} 批分析結果...",
+                }
+            )
+            + "\n"
+        )
 
         synthesis_prompt = _SYNTHESIS_PROMPT.format(
-            desc=safe_desc, summary=safe_summary,
-            exact=safe_exact, semantic=safe_semantic,
+            desc=safe_desc,
+            summary=safe_summary,
+            exact=safe_exact,
+            semantic=safe_semantic,
             batch_results=synthesis_context,
             total_batches=total_batches,
         )
@@ -1031,16 +1088,24 @@ async def _step4_deep_analysis(
             llm_cfg["base_url"],
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
-            messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
+            messages,
+            temperature=0.3,
+            max_tokens=_max_tokens,
+            timeout=_timeout,
         ):
             yield chunk
 
     else:
         # ── No batching: original single-call flow ──
-        yield json.dumps({
-            "type": "status",
-            "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
-        }) + "\n"
+        yield (
+            json.dumps(
+                {
+                    "type": "status",
+                    "text": "🚀 Step 4/5: 雲端 LLM 深度分析中...",
+                }
+            )
+            + "\n"
+        )
 
         code_context = _build_context(results_to_analyze)
         safe_context = sanitize_for_cloud(code_context)
@@ -1077,14 +1142,22 @@ async def _step4_deep_analysis(
             llm_cfg["base_url"],
             api_key or llm_cfg.get("api_key", ""),
             llm_cfg["model"],
-            messages, temperature=0.3, max_tokens=_max_tokens, timeout=_timeout,
+            messages,
+            temperature=0.3,
+            max_tokens=_max_tokens,
+            timeout=_timeout,
         ):
             yield chunk
 
 
 async def full_rca_stream(
-    log_text: str, bug_desc: str, api_key: str = "", top_k: int = DEFAULT_TOP_K,
-    batch_size: int = DEFAULT_BATCH_SIZE, max_tokens: int = 0, timeout: int = 0,
+    log_text: str,
+    bug_desc: str,
+    api_key: str = "",
+    top_k: int = DEFAULT_TOP_K,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    max_tokens: int = 0,
+    timeout: int = 0,
 ) -> AsyncGenerator[str, None]:
     """Full 5-step RCA pipeline with streaming output."""
     t0 = time.time()
@@ -1097,34 +1170,49 @@ async def full_rca_stream(
 
     # ── Step 0: Rule-based log deduplication ──────────────────────
     yield _step_event(0, "active", elapsed=0)
-    yield json.dumps({
-        "type": "status",
-        "text": f"📝 Step 0/5: Log 去重壓縮（{len(log_text):,} chars）...",
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": f"📝 Step 0/5: Log 去重壓縮（{len(log_text):,} chars）...",
+            }
+        )
+        + "\n"
+    )
 
     condensed_log = condense_log(log_text, bug_desc)
     now = time.time()
-    original_lines = len(log_text.split('\n'))
-    condensed_lines = len(condensed_log.split('\n'))
+    original_lines = len(log_text.split("\n"))
+    condensed_lines = len(condensed_log.split("\n"))
     reduction = condensed_lines / max(original_lines, 1) * 100
 
     yield _step_event(0, "done", elapsed=now - step_start)
-    yield json.dumps({
-        "type": "step0_result",
-        "data": {
-            "original_lines": original_lines,
-            "condensed_lines": condensed_lines,
-            "reduction_pct": round(100 - reduction, 1),
-            "condensed_log": condensed_log[:50000],
-        },
-    }) + "\n"
-    yield json.dumps({
-        "type": "status",
-        "text": (
-            f"  ✅ Log 精簡完成：{len(log_text):,} → {len(condensed_log):,} chars"
-            f"（縮減 {100 - reduction:.1f}%）"
-        ),
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "step0_result",
+                "data": {
+                    "original_lines": original_lines,
+                    "condensed_lines": condensed_lines,
+                    "reduction_pct": round(100 - reduction, 1),
+                    "condensed_log": condensed_log[:50000],
+                },
+            }
+        )
+        + "\n"
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": (
+                    f"  ✅ Log 精簡完成：{len(log_text):,} → {len(condensed_log):,} chars"
+                    f"（縮減 {100 - reduction:.1f}%）"
+                ),
+            }
+        )
+        + "\n"
+    )
 
     # Use condensed log for all subsequent steps
     log_text = condensed_log
@@ -1132,40 +1220,60 @@ async def full_rca_stream(
 
     # ── Step 1: Regex extraction ──────────────────────────────────
     yield _step_event(1, "active", elapsed=time.time() - t0)
-    yield json.dumps({
-        "type": "status",
-        "text": "🔧 Step 1/5: 從精簡 Log 中萃取結構化資訊（Error codes, Functions, Files）...",
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": "🔧 Step 1/5: 從精簡 Log 中萃取結構化資訊（Error codes, Functions, Files）...",
+            }
+        )
+        + "\n"
+    )
 
     structured = extract_structured_log(log_text)
 
     now = time.time()
     total_extracted = sum(len(v) for v in structured.values() if isinstance(v, list))
     yield _step_event(1, "done", elapsed=now - step_start)
-    yield json.dumps({
-        "type": "step1_result",
-        "data": {
-            "error_codes": structured["error_codes"],
-            "function_names": structured["function_names"],
-            "file_paths": structured["file_paths"],
-            "exceptions": structured["exceptions"],
-            "memory_addresses": structured.get("memory_addresses", []),
-            "error_lines": structured["error_lines"][:200],
-            "error_lines_count": len(structured["error_lines"]),
-        },
-    }) + "\n"
-    yield json.dumps({
-        "type": "status",
-        "text": f"  ✅ 萃取到 {total_extracted} 個結構化元素",
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "step1_result",
+                "data": {
+                    "error_codes": structured["error_codes"],
+                    "function_names": structured["function_names"],
+                    "file_paths": structured["file_paths"],
+                    "exceptions": structured["exceptions"],
+                    "memory_addresses": structured.get("memory_addresses", []),
+                    "error_lines": structured["error_lines"][:200],
+                    "error_lines_count": len(structured["error_lines"]),
+                },
+            }
+        )
+        + "\n"
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": f"  ✅ 萃取到 {total_extracted} 個結構化元素",
+            }
+        )
+        + "\n"
+    )
     step_start = time.time()
 
     # ── Step 2: LLM semantic expansion ───────────────────────────
     yield _step_event(2, "active", elapsed=time.time() - t0)
-    yield json.dumps({
-        "type": "status",
-        "text": "🧠 Step 2/5: 語意擴充（同義詞、相關模組）...",
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": "🧠 Step 2/5: 語意擴充（同義詞、相關模組）...",
+            }
+        )
+        + "\n"
+    )
 
     expanded = await llm_expand_keywords(structured, bug_desc, api_key, max_tokens=_max_tokens, timeout=_timeout)
 
@@ -1175,31 +1283,47 @@ async def full_rca_stream(
         yield json.dumps({"type": "token_usage", "step": 2, **step2_usage, "max_tokens": _max_tokens}) + "\n"
 
     now = time.time()
-    yield _step_event(2, "done", elapsed=now - step_start,
-                      detail=f"{len(expanded['exact'])} exact, {len(expanded['semantic'])} semantic")
-    yield json.dumps({
-        "type": "step2_result",
-        "data": {
-            "summary": expanded["summary"],
-            "exact": expanded["exact"],
-            "semantic": expanded["semantic"],
-        },
-    }) + "\n"
-    yield json.dumps({
-        "type": "status",
-        "text": (
-            f"  ✅ 精確關鍵字 {len(expanded['exact'])} 個，"
-            f"語意關鍵字 {len(expanded['semantic'])} 個"
-        ),
-    }) + "\n"
+    yield _step_event(
+        2,
+        "done",
+        elapsed=now - step_start,
+        detail=f"{len(expanded['exact'])} exact, {len(expanded['semantic'])} semantic",
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "step2_result",
+                "data": {
+                    "summary": expanded["summary"],
+                    "exact": expanded["exact"],
+                    "semantic": expanded["semantic"],
+                },
+            }
+        )
+        + "\n"
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": (f"  ✅ 精確關鍵字 {len(expanded['exact'])} 個，語意關鍵字 {len(expanded['semantic'])} 個"),
+            }
+        )
+        + "\n"
+    )
     step_start = time.time()
 
     # ── Step 3: Hybrid search ────────────────────────────────────
     yield _step_event(3, "active", elapsed=time.time() - t0)
-    yield json.dumps({
-        "type": "status",
-        "text": "🔎 Step 3/5: Hybrid Search（Keyword grep + Vector 語意搜尋 → RRF 融合）...",
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": "🔎 Step 3/5: Hybrid Search（Keyword grep + Vector 語意搜尋 → RRF 融合）...",
+            }
+        )
+        + "\n"
+    )
 
     fused_results, kw_count, vec_count = await hybrid_search(
         exact_keywords=expanded["exact"],
@@ -1209,23 +1333,31 @@ async def full_rca_stream(
     )
 
     now = time.time()
-    yield _step_event(3, "done", elapsed=now - step_start,
-                      detail=f"KW:{kw_count} Vec:{vec_count} RRF:{len(fused_results)}")
-    yield json.dumps({
-        "type": "step3_result",
-        "data": {
-            "keyword_matches": kw_count,
-            "vector_matches": vec_count,
-            "fused_results": fused_results[:top_k],
-        },
-    }) + "\n"
-    yield json.dumps({
-        "type": "status",
-        "text": (
-            f"  ✅ Keyword: {kw_count} 筆 / Vector: {vec_count} 筆 / "
-            f"RRF 融合: {len(fused_results)} 筆"
-        ),
-    }) + "\n"
+    yield _step_event(
+        3, "done", elapsed=now - step_start, detail=f"KW:{kw_count} Vec:{vec_count} RRF:{len(fused_results)}"
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "step3_result",
+                "data": {
+                    "keyword_matches": kw_count,
+                    "vector_matches": vec_count,
+                    "fused_results": fused_results[:top_k],
+                },
+            }
+        )
+        + "\n"
+    )
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": (f"  ✅ Keyword: {kw_count} 筆 / Vector: {vec_count} 筆 / RRF 融合: {len(fused_results)} 筆"),
+            }
+        )
+        + "\n"
+    )
     step_start = time.time()
 
     # ── Step 4: Cloud LLM deep analysis ──────────────────────────
@@ -1248,16 +1380,25 @@ async def full_rca_stream(
             yield evt
 
     except Exception as e:
-        yield json.dumps({
-            "type": "status",
-            "text": f"⚠️ Step 4 分析中斷: {e}",
-        }) + "\n"
+        yield (
+            json.dumps(
+                {
+                    "type": "status",
+                    "text": f"⚠️ Step 4 分析中斷: {e}",
+                }
+            )
+            + "\n"
+        )
 
     total_elapsed = time.time() - t0
-    yield _step_event(4, "done", elapsed=time.time() - step_start,
-                      detail=f"總耗時 {total_elapsed:.1f}s")
-    yield json.dumps({
-        "type": "status",
-        "text": f"🎉 全部完成！總耗時 {total_elapsed:.1f} 秒",
-    }) + "\n"
+    yield _step_event(4, "done", elapsed=time.time() - step_start, detail=f"總耗時 {total_elapsed:.1f}s")
+    yield (
+        json.dumps(
+            {
+                "type": "status",
+                "text": f"🎉 全部完成！總耗時 {total_elapsed:.1f} 秒",
+            }
+        )
+        + "\n"
+    )
     yield json.dumps({"type": "done"}) + "\n"
