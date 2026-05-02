@@ -519,7 +519,50 @@
           analysisContent.innerHTML = '';
         }
         analysisRawText += (evt.text || '');
-        analysisContent.innerHTML = renderMarkdown(analysisRawText);
+        // Incremental render: only re-render last 2000 chars for speed,
+        // preserve already-rendered HTML before that boundary.
+        var _prevLen = analysisContent.getAttribute('data-rendered-len') || '0';
+        _prevLen = parseInt(_prevLen, 10) || 0;
+        if (_prevLen === 0) {
+          // First chunk — full render
+          analysisContent.innerHTML = renderMarkdown(analysisRawText);
+        } else {
+          // Find a safe split point (start of a line) near _prevLen
+          var _splitAt = _prevLen;
+          var _lookback = Math.min(analysisRawText.length - _prevLen, 500);
+          for (var _i = _prevLen; _i < analysisRawText.length; _i++) {
+            if (_i > _prevLen && analysisRawText[_i] === '\n') {
+              _splitAt = _i;
+              break;
+            }
+          }
+          // If no newline found nearby, use a bigger window
+          if (_splitAt === _prevLen && analysisRawText.length > _prevLen + 200) {
+            _splitAt = analysisRawText.lastIndexOf('\n', _prevLen + 200);
+            if (_splitAt <= _prevLen) _splitAt = _prevLen;
+          }
+          // Re-render the tail portion
+          var _tail = analysisRawText.substring(Math.max(0, _splitAt - 200));
+          var _tailHtml = renderMarkdown(_tail);
+          // Trim the already-rendered part: find the last complete block
+          var _placeholder = '<span id=\"_inc_marker\"></span>';
+          analysisContent.innerHTML = analysisContent.innerHTML + _placeholder;
+          var _marker = document.getElementById('_inc_marker');
+          if (_marker && _marker.previousSibling) {
+            var _container = document.createElement('div');
+            _container.innerHTML = _tailHtml;
+            // Remove everything after the marker
+            while (_marker.nextSibling) _marker.parentNode.removeChild(_marker.nextSibling);
+            _marker.parentNode.removeChild(_marker);
+            // Append new rendered content
+            while (_container.firstChild) {
+              analysisContent.appendChild(_container.firstChild);
+            }
+          } else {
+            analysisContent.innerHTML = renderMarkdown(analysisRawText);
+          }
+        }
+        analysisContent.setAttribute('data-rendered-len', String(analysisRawText.length));
         analysisContent.classList.remove('streaming-cursor');
         if (isAnalyzing) analysisContent.classList.add('streaming-cursor');
         // Auto-scroll analysis
@@ -530,6 +573,11 @@
         setPipelineStep(4, 'done');
         stopPipelineTimer();
         analyzeStatusText.textContent = '分析完成 ✓';
+        // Final full re-render to fix any incremental artifacts
+        if (analysisRawText) {
+          analysisContent.removeAttribute('data-rendered-len');
+          analysisContent.innerHTML = renderMarkdown(analysisRawText);
+        }
         analysisContent.classList.remove('streaming-cursor');
         thinkingSpinner.style.display = 'none';
         showToast('分析完成', 'success');
@@ -992,26 +1040,30 @@
 
     html = html.replace(/`([^`]+)`/g, function(_, code) { return '<code>' + escapeHtml(code) + '</code>'; });
 
-    html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>');
-    html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>');
-    html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+    html = html.replace(/^######\s+(.+)$/gm, function(_, t) { return '<h6>' + escapeHtml(t) + '</h6>'; });
+    html = html.replace(/^#####\s+(.+)$/gm, function(_, t) { return '<h5>' + escapeHtml(t) + '</h5>'; });
+    html = html.replace(/^####\s+(.+)$/gm, function(_, t) { return '<h4>' + escapeHtml(t) + '</h4>'; });
+    html = html.replace(/^###\s+(.+)$/gm, function(_, t) { return '<h3>' + escapeHtml(t) + '</h3>'; });
+    html = html.replace(/^##\s+(.+)$/gm, function(_, t) { return '<h2>' + escapeHtml(t) + '</h2>'; });
+    html = html.replace(/^#\s+(.+)$/gm, function(_, t) { return '<h1>' + escapeHtml(t) + '</h1>'; });
 
-    html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    html = html.replace(/\*\*\*(.+?)\*\*\*/g, function(_, t) { return '<strong><em>' + escapeHtml(t) + '</em></strong>'; });
+    html = html.replace(/\*\*(.+?)\*\*/g, function(_, t) { return '<strong>' + escapeHtml(t) + '</strong>'; });
+    html = html.replace(/\*(.+?)\*/g, function(_, t) { return '<em>' + escapeHtml(t) + '</em>'; });
+    html = html.replace(/~~(.+?)~~/g, function(_, t) { return '<del>' + escapeHtml(t) + '</del>'; });
 
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
+      url = escapeHtml(url);
+      if (/^javascript\s*:/i.test(url)) return escapeHtml(text);
+      return '<a href="' + url + '" target="_blank" rel="noopener">' + escapeHtml(text) + '</a>';
+    });
 
-    html = html.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+    html = html.replace(/^>\s+(.+)$/gm, function(_, t) { return '<blockquote>' + escapeHtml(t) + '</blockquote>'; });
 
-    html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+    html = html.replace(/^[\-\*]\s+(.+)$/gm, function(_, t) { return '<li>' + escapeHtml(t) + '</li>'; });
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
 
-    html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+    html = html.replace(/^\d+\.\s+(.+)$/gm, function(_, t) { return '<li>' + escapeHtml(t) + '</li>'; });
     html = html.replace(/(<li>.*<\/li>\n?)+/g, function(match) {
       if (match.indexOf('<ul>') >= 0) return match;
       return '<ol>' + match + '</ol>';

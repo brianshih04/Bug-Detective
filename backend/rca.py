@@ -41,6 +41,19 @@ def _chat_url(base_url: str) -> str:
     return url + "/chat/completions"
 
 
+_shared_http_client: httpx.AsyncClient | None = None
+
+def _get_shared_http_client(timeout: float = 300) -> httpx.AsyncClient:
+    """Get or create a shared httpx.AsyncClient with connection pooling."""
+    global _shared_http_client
+    if _shared_http_client is None:
+        _shared_http_client = httpx.AsyncClient(
+            timeout=timeout,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _shared_http_client
+
+
 async def call_llm_stream(
     base_url: str, api_key: str, model: str, messages: list[dict],
     temperature: float = 0.3, max_tokens: int = 4096, timeout: float = 120,
@@ -55,37 +68,37 @@ async def call_llm_stream(
         "temperature": temperature, "max_tokens": max_tokens, "stream": True,
     }
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream(
-            "POST", _chat_url(base_url), json=payload, headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            token_count = 0
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data.strip() == "[DONE]":
-                    # Emit final token count
-                    if token_count > 0:
-                        yield json.dumps({"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}) + "\n"
-                    break
-                try:
-                    chunk = json.loads(data)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content", "")
-                    reasoning = (
-                        delta.get("reasoning", "")
-                        or delta.get("reasoning_content", "")
-                    )
-                    if reasoning:
-                        yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
-                        token_count += 1
-                    if content:
-                        yield json.dumps({"type": "content", "text": content}) + "\n"
-                        token_count += 1
-                except json.JSONDecodeError:
-                    continue
+    client = _get_shared_http_client(timeout)
+    async with client.stream(
+        "POST", _chat_url(base_url), json=payload, headers=headers,
+    ) as resp:
+        resp.raise_for_status()
+        token_count = 0
+        async for line in resp.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data.strip() == "[DONE]":
+                # Emit final token count
+                if token_count > 0:
+                    yield json.dumps({"type": "token_usage", "completion_tokens": token_count, "max_tokens": max_tokens}) + "\n"
+                break
+            try:
+                chunk = json.loads(data)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content", "")
+                reasoning = (
+                    delta.get("reasoning", "")
+                    or delta.get("reasoning_content", "")
+                )
+                if reasoning:
+                    yield json.dumps({"type": "thinking", "text": reasoning}) + "\n"
+                    token_count += 1
+                if content:
+                    yield json.dumps({"type": "content", "text": content}) + "\n"
+                    token_count += 1
+            except json.JSONDecodeError:
+                continue
 
 
 async def call_llm_sync(
@@ -102,24 +115,28 @@ async def call_llm_sync(
         "temperature": temperature, "max_tokens": max_tokens,
     }
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(_chat_url(base_url), json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        msg = data["choices"][0]["message"]
-        # Ollama reasoning models put thinking in reasoning_content, answer in content
-        content = msg.get("content", "") or ""
-        reasoning = msg.get("reasoning_content", "") or ""
-        text = content.strip() or reasoning.strip() or ""
-        usage = data.get("usage", {})
-        return text, usage
+    client = _get_shared_http_client(timeout)
+    resp = await client.post(_chat_url(base_url), json=payload, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    msg = data["choices"][0]["message"]
+    # Ollama reasoning models put thinking in reasoning_content, answer in content
+    content = msg.get("content", "") or ""
+    reasoning = msg.get("reasoning_content", "") or ""
+    text = content.strip() or reasoning.strip() or ""
+    usage = data.get("usage", {})
+    return text, usage
 
 
 # ---------------------------------------------------------------------------
 # Index / Retriever setup
 # ---------------------------------------------------------------------------
+_RETRIEVER_CACHE: dict[int, object] = {}
+
 def get_retriever(similarity_top_k: int = 10):
-    """Get vector retriever from Qdrant."""
+    """Get vector retriever from Qdrant (cached by top_k)."""
+    if similarity_top_k in _RETRIEVER_CACHE:
+        return _RETRIEVER_CACHE[similarity_top_k]
     embed_model = OllamaEmbedding(
         model_name=EMBEDDING_MODEL,
         base_url=OLLAMA_URL,
@@ -132,7 +149,9 @@ def get_retriever(similarity_top_k: int = 10):
     index = VectorStoreIndex.from_vector_store(
         vector_store, embed_model=embed_model,
     )
-    return index.as_retriever(similarity_top_k=similarity_top_k)
+    retriever = index.as_retriever(similarity_top_k=similarity_top_k)
+    _RETRIEVER_CACHE[similarity_top_k] = retriever
+    return retriever
 
 
 # ---------------------------------------------------------------------------

@@ -74,7 +74,11 @@ app = FastAPI(title="Bug-Detective", version="2.0", lifespan=lifespan)
 # --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:17580",
+        "http://127.0.0.1:17580",
+        "https://bug.avision-gb10.org",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -221,7 +225,7 @@ async def fetch_models(req: FetchModelsRequest):
             break
 
     try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             candidates = [
                 api_root + "/models",       # OpenAI-compatible (works for most)
                 api_root + "/api/tags",     # Ollama
